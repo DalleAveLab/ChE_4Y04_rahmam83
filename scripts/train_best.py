@@ -63,7 +63,7 @@ def train_fixed(model, train_loader, lr, max_epochs, device, seed, verbose=True)
 
     epoch_losses = []
     epoch_bar = tqdm(range(max_epochs), desc="    Training", unit="epoch",
-                     disable=not verbose)
+                     disable=not verbose, dynamic_ncols=True)
     for epoch in epoch_bar:
         model.train()
         total_loss = 0.0
