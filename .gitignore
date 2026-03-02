@@ -7,6 +7,10 @@ data/
 # Notebooks checkpoints
 .ipynb_checkpoints/
 
+# Results files
+results_N200_tr160_v0_te40/
+*.npz
+
 # Environment files
 .env
 venv/
@@ -18,3 +22,5 @@ venv/
 # OS junk
 .DS_Store
 Thumbs.db
+
+
