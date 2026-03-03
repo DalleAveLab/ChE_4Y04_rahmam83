@@ -8,8 +8,9 @@ data/
 .ipynb_checkpoints/
 
 # Results files
+results_N50_tr30_v10_te10
 results_N200_tr160_v0_te40/
-*.npz
+
 
 # Environment files
 .env
