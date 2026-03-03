@@ -8,7 +8,7 @@ requirements.txt → Python dependencies
 
 ## Setup
 1) Install dependencies: python -m pip install -r requirements.txt
-2) Place the raw H5 file in: data/raw/tep_data.h5
+2) Place the [raw H5 file](https://data.dtu.dk/articles/dataset/Tennessee_Eastman_Reference_Data_for_Fault-Detection_and_Decision_Support_Systems/13385936) (Mode 1 only) in: `data/raw/tep_data.h5`
 2) Edit config.yaml
 
 
