@@ -33,7 +33,7 @@ requirements.txt → Python dependencies
 
 ---
 
-## Experiment 1 — Hyperparameter Tuning (30 runs/IDV)
+## Experiment 1 — Hyperparameter Tuning
 
 Uses 50 runs per IDV (30 train / 10 val / 10 test) to find the best hyperparameters
 for each KAN variant via Optuna (30 trials per model).
