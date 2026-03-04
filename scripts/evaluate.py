@@ -45,6 +45,39 @@ def plot_loss_curve(epoch_losses: list, variant: str, out_path: Path):
     print(f"  Saved: {out_path}")
 
 
+def plot_confusion_matrix(cm: np.ndarray, classes: list, variant: str, out_path: Path):
+    """Save a row-normalized confusion matrix heatmap as PNG."""
+    n = len(classes)
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_norm = np.where(row_sums > 0, cm / row_sums, 0.0)
+
+    fig, ax = plt.subplots(figsize=(max(10, n * 0.6), max(8, n * 0.55)))
+    im = ax.imshow(cm_norm, interpolation='nearest', cmap='Blues', vmin=0, vmax=1)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label='Recall (row-normalized)')
+
+    tick_labels = [f'C{c}' for c in classes]
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=8)
+    ax.set_yticklabels(tick_labels, fontsize=8)
+    ax.set_xlabel('Predicted Class', fontsize=10)
+    ax.set_ylabel('True Class', fontsize=10)
+    ax.set_title(f'Confusion Matrix (row-normalized) — {variant}', fontsize=11)
+
+    thresh = 0.5
+    for i in range(n):
+        for j in range(n):
+            val = cm_norm[i, j]
+            color = 'white' if val > thresh else 'black'
+            ax.text(j, i, f'{val:.2f}', ha='center', va='center',
+                    fontsize=6, color=color)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out_path}")
+
+
 def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     """
     Load predictions.npz for a variant and compute metrics.
@@ -129,6 +162,7 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     # Load additional saved data (best_params.json, metrics.json)
     # ------------------------------------------------------------------
     variant_dir = results_dir / variant
+    plot_confusion_matrix(cm, classes, variant, variant_dir / 'confusion_matrix.png')
 
     # Best params from tuning
     params_path = variant_dir / 'best_params.json'
