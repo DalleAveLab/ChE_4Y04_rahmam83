@@ -200,9 +200,12 @@ def main():
             log=ss['learning_rate'].get('log', True))
         dropout_prob = trial.suggest_float(
             'dropout_prob', ss['dropout_prob']['min'], ss['dropout_prob']['max'])
+        wd = trial.suggest_float(
+            'weight_decay', ss['weight_decay']['min'], ss['weight_decay']['max'],
+            log=ss['weight_decay'].get('log', True))
 
         print(f"    Params: hidden_dim={hidden_dim}, hidden_layers={hidden_layers}, "
-              f"lr={lr:.2e}, dropout_prob={dropout_prob:.3f}")
+              f"lr={lr:.2e}, dropout_prob={dropout_prob:.3f}, wd={wd:.2e}")
 
         model = BayesianRNN(
             input_dim=input_dim,
@@ -214,7 +217,7 @@ def main():
         ).to(device)
 
         guide = AutoNormal(model)
-        optimizer = pyro.optim.Adam({'lr': lr})
+        optimizer = pyro.optim.Adam({'lr': lr, 'weight_decay': wd})
         svi = SVI(model, guide, optimizer, loss=TraceMeanField_ELBO())
 
         _g = torch.Generator().manual_seed(seed + trial.number)
@@ -296,7 +299,8 @@ def main():
     ).to(device)
 
     guide = AutoNormal(best_model)
-    optimizer = pyro.optim.Adam({'lr': best_params['lr']})
+    optimizer = pyro.optim.Adam({'lr': best_params['lr'],
+                                 'weight_decay': best_params['weight_decay']})
     svi = SVI(best_model, guide, optimizer, loss=TraceMeanField_ELBO())
 
     _g_retrain = torch.Generator().manual_seed(seed)

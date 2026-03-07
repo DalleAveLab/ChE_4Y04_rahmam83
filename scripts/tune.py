@@ -44,10 +44,10 @@ VARIANT_PARAMS = {
     'fourier_kan':   ['gridsize', 'smooth_initialization'],
     'fast_kan':      ['num_grids', 'grid_min', 'grid_max'],
     'efficient_kan': ['grid_size', 'spline_order'],
-    'mlp':           ['dropout_prob'],
-    'cnn':           ['num_filters', 'kernel_size', 'dropout_prob'],
-    'rnn':           ['dropout_prob'],
-    'lstm':          ['dropout_prob'],
+    'mlp':           ['dropout_prob', 'weight_decay'],
+    'cnn':           ['num_filters', 'kernel_size', 'dropout_prob', 'weight_decay'],
+    'rnn':           ['dropout_prob', 'weight_decay'],
+    'lstm':          ['dropout_prob', 'weight_decay'],
 }
 
 
@@ -77,7 +77,7 @@ def sample_variant_params(trial, model_name, search_space):
 # Training loop with early stopping
 # ======================================================================
 def train_model(model, train_loader, val_loader, lr, max_epochs, patience,
-                device, seed, verbose=False):
+                device, seed, weight_decay=0.0, verbose=False):
     """
     Train model with early stopping on validation accuracy.
 
@@ -89,7 +89,7 @@ def train_model(model, train_loader, val_loader, lr, max_epochs, patience,
     torch.manual_seed(seed)
     model = model.to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
 
     best_val_acc = 0.0
@@ -258,11 +258,12 @@ def main():
 
         # Variant-specific params
         variant_kwargs = sample_variant_params(trial, model_name, ss)
+        wd = variant_kwargs.pop('weight_decay', 0.0)
         if model_name in ('rnn', 'lstm', 'cnn'):
             variant_kwargs['seq_len'] = config.window_size
 
         print(f"    Params: hidden_dim={hidden_dim}, hidden_layers={hidden_layers}, "
-              f"lr={lr:.2e}, {variant_kwargs}")
+              f"lr={lr:.2e}, wd={wd:.2e}, {variant_kwargs}")
 
         # Build model
         ModelClass = MODEL_REGISTRY[model_name]
@@ -278,7 +279,7 @@ def main():
         val_acc, _ = train_model(
             model, train_loader, val_loader,
             lr=lr, max_epochs=max_epochs, patience=patience,
-            device=device, seed=seed, verbose=False,
+            device=device, seed=seed, weight_decay=wd, verbose=False,
         )
 
         print(f"    Result: val_acc={val_acc:.4f}")
@@ -348,6 +349,7 @@ def main():
     for key in VARIANT_PARAMS.get(model_name, []):
         if key in best_params:
             variant_kwargs[key] = best_params[key]
+    wd = variant_kwargs.pop('weight_decay', 0.0)
     if model_name in ('rnn', 'lstm', 'cnn'):
         variant_kwargs['seq_len'] = config.window_size
 
@@ -375,6 +377,7 @@ def main():
         patience=patience,
         device=device,
         seed=seed,
+        weight_decay=wd,
         verbose=True,
     )
 
