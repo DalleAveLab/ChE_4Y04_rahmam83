@@ -44,6 +44,10 @@ VARIANT_PARAMS = {
     'fourier_kan':   ['gridsize', 'smooth_initialization'],
     'fast_kan':      ['num_grids', 'grid_min', 'grid_max'],
     'efficient_kan': ['grid_size', 'spline_order'],
+    'mlp':           ['dropout_prob'],
+    'cnn':           ['num_filters', 'kernel_size', 'dropout_prob'],
+    'rnn':           ['dropout_prob'],
+    'lstm':          ['dropout_prob'],
 }
 
 
@@ -254,6 +258,8 @@ def main():
 
         # Variant-specific params
         variant_kwargs = sample_variant_params(trial, model_name, ss)
+        if model_name in ('rnn', 'lstm', 'cnn'):
+            variant_kwargs['seq_len'] = config.window_size
 
         print(f"    Params: hidden_dim={hidden_dim}, hidden_layers={hidden_layers}, "
               f"lr={lr:.2e}, {variant_kwargs}")
@@ -342,6 +348,8 @@ def main():
     for key in VARIANT_PARAMS.get(model_name, []):
         if key in best_params:
             variant_kwargs[key] = best_params[key]
+    if model_name in ('rnn', 'lstm', 'cnn'):
+        variant_kwargs['seq_len'] = config.window_size
 
     ModelClass = MODEL_REGISTRY[model_name]
     best_model = ModelClass(

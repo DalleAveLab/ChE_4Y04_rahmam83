@@ -168,3 +168,15 @@ tuning:
 
     spline_order:
       choices: [2, 3, 4]
+
+    # MLP, RNN, LSTM, CNN, BayesianRNN
+    dropout_prob:
+      min: 0.0
+      max: 0.5
+
+    # CNN specific
+    num_filters:
+      min: 16
+      max: 64
+    kernel_size:
+      choices: [2, 3, 4, 5]

@@ -194,6 +194,8 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     variant_kwargs = {k: best_params[k]
                      for k in VARIANT_PARAMS.get(model_name, [])
                      if k in best_params}
+    if model_name in ('rnn', 'lstm', 'cnn'):
+        variant_kwargs['seq_len'] = config.window_size
 
     ModelClass = MODEL_REGISTRY[model_name]
     model = ModelClass(

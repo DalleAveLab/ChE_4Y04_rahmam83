@@ -28,7 +28,10 @@ import matplotlib.pyplot as plt
 
 from configs.config_loader import load_config
 
-ALL_VARIANTS = ['efficient_kan', 'fourier_kan', 'wavelet_kan', 'fast_kan']
+ALL_VARIANTS = [
+    'efficient_kan', 'fourier_kan', 'wavelet_kan', 'fast_kan',
+    'mlp', 'cnn', 'rnn', 'lstm',
+]
 
 
 def plot_loss_curve(epoch_losses: list, variant: str, out_path: Path):
@@ -78,6 +81,98 @@ def plot_confusion_matrix(cm: np.ndarray, classes: list, variant: str, out_path:
     print(f"  Saved: {out_path}")
 
 
+def plot_time_series_per_fault(
+    y_prob:    np.ndarray,
+    y_true:    np.ndarray,
+    run_ids:   np.ndarray,
+    start_idx: np.ndarray,
+    end_idx:   np.ndarray,
+    variant:   str,
+    out_dir:   Path,
+    fault_start: int = 600,
+) -> None:
+    """
+    For each fault class present in run_ids, average P(healthy) and P(IDV#)
+    across all runs of that class and save a time-series plot as PNG.
+
+    Expected pattern: P(healthy) dominates before fault_start, then collapses
+    as P(IDV#) rises.
+    """
+    # Parse fault classes from Run_ID strings (format: 'IDV{k}_Run{n}')
+    unique_run_ids = np.unique(run_ids)
+    fault_classes = sorted(set(
+        int(rid.split('_')[0][3:]) for rid in unique_run_ids
+    ))
+
+    for k in fault_classes:
+        prefix = f'IDV{k}_'
+        runs_for_k = [rid for rid in unique_run_ids if rid.startswith(prefix)]
+        if not runs_for_k:
+            continue
+
+        healthy_curves = []
+        fault_curves   = []
+        x_axis         = None
+
+        for run_id in sorted(runs_for_k):
+            mask = run_ids == run_id
+            # Sort windows within this run by start position
+            order = np.argsort(start_idx[mask])
+            p_healthy = y_prob[mask, 0][order]
+            p_fault   = y_prob[mask, k][order]
+            x         = end_idx[mask][order]
+            healthy_curves.append(p_healthy)
+            fault_curves.append(p_fault)
+            if x_axis is None:
+                x_axis = x
+
+        # Stack → (n_runs, n_windows_per_run); trim to minimum length across runs
+        min_len = min(len(c) for c in healthy_curves)
+        healthy_mat = np.stack([c[:min_len] for c in healthy_curves])
+        fault_mat   = np.stack([c[:min_len] for c in fault_curves])
+        x_axis      = x_axis[:min_len]
+
+        mean_healthy = healthy_mat.mean(axis=0)
+        std_healthy  = healthy_mat.std(axis=0)
+        mean_fault   = fault_mat.mean(axis=0)
+        std_fault    = fault_mat.std(axis=0)
+
+        n_runs = len(runs_for_k)
+        fig, ax = plt.subplots(figsize=(12, 4))
+
+        ax.plot(x_axis, mean_healthy, color='steelblue',  label='P(healthy)',    linewidth=1.0)
+        ax.fill_between(x_axis,
+                        mean_healthy - std_healthy,
+                        mean_healthy + std_healthy,
+                        alpha=0.2, color='steelblue')
+
+        ax.plot(x_axis, mean_fault,   color='darkorange', label=f'P(IDV{k})',    linewidth=1.0)
+        ax.fill_between(x_axis,
+                        mean_fault - std_fault,
+                        mean_fault + std_fault,
+                        alpha=0.2, color='darkorange')
+
+        ax.axvline(x=fault_start, color='red', linestyle='--', linewidth=1.2,
+                   label=f'Fault inserted (t={fault_start})')
+
+        ax.set_xlim(x_axis[0], x_axis[-1])
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_xlabel('Timestep (end of window)', fontsize=10)
+        ax.set_ylabel('Softmax probability', fontsize=10)
+        ax.set_title(
+            f'{variant} — IDV{k}: Mean probability over {n_runs} test runs (±1 std)',
+            fontsize=11
+        )
+        ax.legend(fontsize=9, loc='center right')
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        out_path = out_dir / f'time_series_IDV{k}.png'
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved: {out_path}")
+
+
 def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     """
     Load predictions.npz for a variant and compute metrics.
@@ -124,8 +219,17 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         alarm       = fault_prob > ALARM_THRESHOLD
         healthy_mask = y_true == 0
         fault_mask   = y_true != 0
-        false_alarm_rate = float(alarm[healthy_mask].mean()) if healthy_mask.any() else None
-        detection_rate   = float(alarm[fault_mask].mean())   if fault_mask.any()   else None
+        false_alarm_rate    = float(alarm[healthy_mask].mean()) if healthy_mask.any() else None
+        detection_rate      = float(alarm[fault_mask].mean())   if fault_mask.any()   else None
+        correct_normal_rate = (1.0 - false_alarm_rate) if false_alarm_rate is not None else None
+        miss_rate           = (1.0 - detection_rate)   if detection_rate   is not None else None
+
+        # Per-class FDR: detection rate for each individual fault class
+        fault_classes_list = sorted(c for c in set(y_true) if c != 0)
+        per_class_detection_rate = {
+            int(k): float(alarm[y_true == k].mean()) if (y_true == k).any() else None
+            for k in fault_classes_list
+        }
 
         # Top-2 margin: gap between highest and second-highest class probability.
         # A small margin (e.g. 35% vs 34%) means the model is uncertain even when
@@ -138,10 +242,13 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         confidence = None
         mean_conf_correct = None
         mean_conf_wrong   = None
-        false_alarm_rate  = None
-        detection_rate    = None
-        mean_top2_margin  = None
-        frac_ambiguous    = None
+        false_alarm_rate         = None
+        detection_rate           = None
+        correct_normal_rate      = None
+        miss_rate                = None
+        per_class_detection_rate = {}
+        mean_top2_margin         = None
+        frac_ambiguous           = None
 
     metrics = {
         'accuracy': float(acc),
@@ -152,8 +259,11 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         'mean_conf_correct': mean_conf_correct,
         'mean_conf_wrong':   mean_conf_wrong,
         'alarm_threshold':   ALARM_THRESHOLD,
-        'false_alarm_rate':  false_alarm_rate,
-        'detection_rate':    detection_rate,
+        'false_alarm_rate':    false_alarm_rate,
+        'detection_rate':            detection_rate,
+        'correct_normal_rate':       correct_normal_rate,
+        'miss_rate':                 miss_rate,
+        'per_class_detection_rate':  per_class_detection_rate,
         'mean_top2_margin':  mean_top2_margin,
         'frac_ambiguous':    frac_ambiguous,
     }
@@ -163,6 +273,14 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     # ------------------------------------------------------------------
     variant_dir = results_dir / variant
     plot_confusion_matrix(cm, classes, variant, variant_dir / 'confusion_matrix.png')
+
+    # Time-series probability plots (requires Run_ID metadata)
+    if all(k in data for k in ('Run_ID', 'start_idx', 'end_idx')) and y_prob is not None:
+        plot_time_series_per_fault(
+            y_prob, y_true,
+            data['Run_ID'], data['start_idx'], data['end_idx'],
+            variant, variant_dir,
+        )
 
     # Best params from tuning
     params_path = variant_dir / 'best_params.json'
@@ -181,7 +299,8 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         metrics['n_trials'] = tuning_metrics.get('n_trials')
         metrics['best_trial'] = tuning_metrics.get('best_trial')
 
-        loss_curve = tuning_metrics.get('train_loss_curve')
+        loss_curve = (tuning_metrics.get('train_loss_curve')
+                      or tuning_metrics.get('train_elbo_curve'))
         if loss_curve:
             plot_loss_curve(loss_curve, variant, variant_dir / 'loss_curve.png')
     else:
@@ -412,23 +531,70 @@ def print_comparison_table(results: dict):
         print(f"\n{'='*120}")
         print(f"  Alarm Analysis  (threshold: fault_prob = 1 - P(class 0) > {threshold:.0%})")
         print(f"{'='*120}")
-        print(f"\n  {'Model':<18s} {'False Alarm Rate':>18s} {'Detection Rate':>16s} "
+        print(f"\n  {'Model':<18s} {'False Alarm Rate':>18s} {'Correct Normal Rate':>20s} "
+              f"{'Detection Rate':>16s} {'Miss Rate':>12s} "
               f"{'Mean Top-2 Margin':>20s} {'Ambiguous (<10pp)':>18s}")
-        print(f"  {'-'*18} {'-'*18} {'-'*16} {'-'*20} {'-'*18}")
-        print(f"  {'':18s} {'(healthy → alarm)':>18s} {'(fault → alarm)':>16s} "
+        print(f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}")
+        print(f"  {'':18s} {'(healthy → alarm)':>18s} {'(healthy → no alarm)':>20s} "
+              f"{'(fault → alarm)':>16s} {'(fault → no alarm)':>12s} "
               f"{'(top1 - top2 prob)':>20s} {'(% windows)':>18s}")
-        print(f"  {'-'*18} {'-'*18} {'-'*16} {'-'*20} {'-'*18}")
+        print(f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}")
+        sanity_far = sanity_dr = None
         for variant, m in results.items():
-            far   = m.get('false_alarm_rate')
-            dr    = m.get('detection_rate')
+            far    = m.get('false_alarm_rate')
+            cnr    = m.get('correct_normal_rate')
+            dr     = m.get('detection_rate')
+            mr     = m.get('miss_rate')
             margin = m.get('mean_top2_margin')
             ambig  = m.get('frac_ambiguous')
             far_str    = f"{far:.4f} ({far*100:.1f}%)"       if far    is not None else "N/A"
+            cnr_str    = f"{cnr:.4f} ({cnr*100:.1f}%)"       if cnr    is not None else "N/A"
             dr_str     = f"{dr:.4f} ({dr*100:.1f}%)"         if dr     is not None else "N/A"
+            mr_str     = f"{mr:.4f} ({mr*100:.1f}%)"         if mr     is not None else "N/A"
             margin_str = f"{margin:.4f} ({margin*100:.1f}pp)" if margin is not None else "N/A"
             ambig_str  = f"{ambig*100:.1f}%"                  if ambig  is not None else "N/A"
-            print(f"  {variant:<18s} {far_str:>18s} {dr_str:>16s} "
+            print(f"  {variant:<18s} {far_str:>18s} {cnr_str:>20s} "
+                  f"{dr_str:>16s} {mr_str:>12s} "
                   f"{margin_str:>20s} {ambig_str:>18s}")
+            if sanity_far is None and far is not None and cnr is not None:
+                sanity_far = far + cnr
+            if sanity_dr is None and dr is not None and mr is not None:
+                sanity_dr = dr + mr
+        print(f"\n  Sanity check — FAR + CNR = {sanity_far:.6f}  |  FDR + MR = {sanity_dr:.6f}"
+              f"  (both should equal 1.000000)"
+              if sanity_far is not None and sanity_dr is not None else "")
+
+        # Per-class FDR table (mirrors per-class F1 layout)
+        all_fault_classes = set()
+        for m in results.values():
+            all_fault_classes.update(m.get('per_class_detection_rate', {}).keys())
+        all_fault_classes = sorted(all_fault_classes)
+
+        if all_fault_classes:
+            print(f"\n  Per-Class Detection Rate  (fault → alarm, threshold {threshold:.0%})")
+            class_labels = [f"IDV{c}" for c in all_fault_classes]
+            header = f"  {'Model':<18s} " + " ".join(f"{cl:>7s}" for cl in class_labels)
+            print(f"\n{header}")
+            print(f"  {'-'*18} " + " ".join("-" * 7 for _ in class_labels))
+            for variant, m in results.items():
+                pcdr = m.get('per_class_detection_rate', {})
+                row = f"  {variant:<18s} "
+                row += " ".join(
+                    f"{pcdr[c]:>7.3f}" if pcdr.get(c) is not None else f"{'N/A':>7s}"
+                    for c in all_fault_classes
+                )
+                print(row)
+            # Highlight worst-detected fault classes per model
+            print(f"\n  Weakest fault classes per model (FDR < 0.85):")
+            for variant, m in results.items():
+                pcdr = m.get('per_class_detection_rate', {})
+                weak = {c: v for c, v in pcdr.items() if v is not None and v < 0.85}
+                if weak:
+                    weak_sorted = sorted(weak.items(), key=lambda x: x[1])
+                    weak_str = ", ".join(f"IDV{c}={v:.3f}" for c, v in weak_sorted)
+                    print(f"    {variant:<18s}: {weak_str}")
+                else:
+                    print(f"    {variant:<18s}: None (all fault classes >= 0.85)")
 
     print(f"\n{'='*120}")
     print("  Evaluation complete.")
