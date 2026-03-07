@@ -1,7 +1,0 @@
-{
-  "hidden_layers": 1,
-  "hidden_dim": 64,
-  "lr": 0.00017738077204525706,
-  "gridsize": 4,
-  "smooth_initialization": false
-}

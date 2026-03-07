@@ -1,7 +1,0 @@
-{
-  "hidden_layers": 2,
-  "hidden_dim": 64,
-  "lr": 0.0034324385540717896,
-  "grid_size": 4,
-  "spline_order": 3
-}
