@@ -8,8 +8,8 @@ Validates the output of create_windows.py by checking:
   4. Label is from the last timestep of each window
 
 Usage:
-    python tests/test_windowing.py
-    python tests/test_windowing.py --config configs/config.yaml
+    python tests/test_windowing.py --exp 1
+    python tests/test_windowing.py --exp 2
 
 Author: [Your Name]
 Created: February 2026
@@ -24,6 +24,33 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from configs.config_loader import load_config
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hardcoded experiment definitions
+# ─────────────────────────────────────────────────────────────────────────────
+
+_N_IDVS          = 27    # IDV1-28 excl. IDV6 (doesn't exist in H5)
+_N_CLASSES       = 28    # 27 faults + class 0 (healthy, embedded in each fault run)
+_TIMESTEPS_PER_RUN = 2001  # TEP runs are 2001 timesteps (0-2000)
+
+EXPERIMENTS = {
+    '1': {
+        'windows_dir': Path('data/processed_N50_tr30_v10_te10/windows'),
+        'window_size': 5,
+        'stride':      1,
+        'splits':      ['train', 'val', 'test'],
+        # Runs per IDV per split (total_runs=50, train/val/test=30/10/10)
+        'runs_per_idv': {'train': 30, 'val': 10, 'test': 10},
+    },
+    '2': {
+        'windows_dir': Path('data/processed_N200_tr160_v0_te40/windows'),
+        'window_size': 5,
+        'stride':      1,
+        'splits':      ['train', 'test'],
+        # Runs per IDV per split (total_runs=200, train/test=160/40)
+        'runs_per_idv': {'train': 160, 'val': 0, 'test': 40},
+    },
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,11 +69,14 @@ def _fail(msg: str):
 # Individual checks
 # ─────────────────────────────────────────────────────────────────────────────
 
-def check_files_exist(windows_dir: Path, window_size: int, stride: int):
-    """Check 1: All three .npz files exist."""
+def check_files_exist(windows_dir: Path, window_size: int, stride: int,
+                      splits: list = None):
+    """Check 1: All expected .npz files exist."""
     print("\n[1/4] Checking output files exist...")
+    if splits is None:
+        splits = ['train', 'val', 'test']
 
-    for split in ['train', 'val', 'test']:
+    for split in splits:
         filepath = windows_dir / f'{split}_windows_w{window_size}_s{stride}.npz'
         if filepath.exists():
             size_mb = filepath.stat().st_size / 1024**2
@@ -59,17 +89,31 @@ def check_files_exist(windows_dir: Path, window_size: int, stride: int):
 
 
 def check_shapes(windows_dir: Path, window_size: int, stride: int,
-                 expected_splits: dict):
+                 runs_per_idv: dict, splits: list = None):
     """
     Check 2: X and y shapes are consistent and correct.
 
-    Expected shapes:
-        X : (n_windows, window_size * n_features)
-        y : (n_windows,)
+    Expected X shape:  (n_windows, window_size * n_features)
+    Expected y shape:  (n_windows,)
+
+    Expected window count formula:
+        n_windows_per_run = (timesteps_per_run - window_size) // stride + 1
+                          = (2001 - window_size) // stride + 1
+        total_windows     = n_idvs × runs_per_idv[split] × n_windows_per_run
+                          = 27    × runs_per_idv[split]  × n_windows_per_run
+
+    Where 27 IDVs = IDV1-28 excluding IDV6 (doesn't exist in the dataset).
+    Class 0 (healthy) is embedded in each fault run (rows 0-599), so it
+    does not add extra runs — only 27 IDVs contribute to the run count.
     """
     print("\n[2/4] Checking X and y shapes...")
+    if splits is None:
+        splits = ['train', 'val', 'test']
 
-    for split in ['train', 'val', 'test']:
+    n_windows_per_run = (_TIMESTEPS_PER_RUN - window_size) // stride + 1
+    print(f"  Expected windows/run: ({_TIMESTEPS_PER_RUN} - {window_size}) // {stride} + 1 = {n_windows_per_run:,}")
+
+    for split in splits:
         filepath = windows_dir / f'{split}_windows_w{window_size}_s{stride}.npz'
         data = np.load(filepath, allow_pickle=True)
 
@@ -99,10 +143,28 @@ def check_shapes(windows_dir: Path, window_size: int, stride: int,
 
         n_features = X.shape[1] // window_size
 
+        # Check expected window count if runs_per_idv is provided for this split
+        expected_str = ""
+        if runs_per_idv and split in runs_per_idv and runs_per_idv[split] > 0:
+            n_runs   = runs_per_idv[split]
+            expected = _N_IDVS * n_runs * n_windows_per_run
+            expected_str = (
+                f"  expected={expected:,}  "
+                f"({_N_IDVS} IDVs × {n_runs} runs × {n_windows_per_run:,} windows)"
+            )
+            if X.shape[0] != expected:
+                _fail(
+                    f"{split} X has {X.shape[0]:,} windows but expected {expected:,}\n"
+                    f"       Formula: {_N_IDVS} IDVs × {n_runs} runs/IDV × "
+                    f"{n_windows_per_run:,} windows/run = {expected:,}"
+                )
+
         _pass(
             f"{split:<6}  X={str(X.shape):<25}  y={str(y.shape):<15}  "
             f"n_features={n_features}"
         )
+        if expected_str:
+            print(f"         {expected_str}")
 
         # Check all splits have same number of features
         if split == 'train':
@@ -115,7 +177,8 @@ def check_shapes(windows_dir: Path, window_size: int, stride: int,
                 )
 
 
-def check_run_boundaries(windows_dir: Path, window_size: int, stride: int):
+def check_run_boundaries(windows_dir: Path, window_size: int, stride: int,
+                         splits: list = None):
     """
     Check 3: No window crosses a Run_ID boundary.
 
@@ -124,8 +187,10 @@ def check_run_boundaries(windows_dir: Path, window_size: int, stride: int):
     for every window (consecutive indices within a run).
     """
     print("\n[3/4] Checking no windows cross Run_ID boundaries...")
+    if splits is None:
+        splits = ['train', 'val', 'test']
 
-    for split in ['train', 'val', 'test']:
+    for split in splits:
         filepath = windows_dir / f'{split}_windows_w{window_size}_s{stride}.npz'
         data = np.load(filepath, allow_pickle=True)
 
@@ -166,7 +231,8 @@ def check_run_boundaries(windows_dir: Path, window_size: int, stride: int):
         _pass(f"{split:<6}  all {len(start_idx):,} windows stay within their run")
 
 
-def check_labels(windows_dir: Path, window_size: int, stride: int):
+def check_labels(windows_dir: Path, window_size: int, stride: int,
+                 splits: list = None):
     """
     Check 4: Label for each window matches the last timestep's target.
 
@@ -177,8 +243,10 @@ def check_labels(windows_dir: Path, window_size: int, stride: int):
     the label, not the actual feature values.
     """
     print("\n[4/4] Checking labels come from last timestep of each window...")
+    if splits is None:
+        splits = ['train', 'val', 'test']
 
-    for split in ['train', 'val', 'test']:
+    for split in splits:
         filepath = windows_dir / f'{split}_windows_w{window_size}_s{stride}.npz'
         data = np.load(filepath, allow_pickle=True)
 
@@ -218,30 +286,51 @@ def check_labels(windows_dir: Path, window_size: int, stride: int):
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_smoke_test(config_path: str = 'configs/config.yaml'):
+def run_smoke_test(config_path: str = None, exp: str = None):
     """
     Run all windowing smoke tests.
 
     Parameters:
     -----------
-    config_path : str
-        Path to config.yaml
+    config_path : str, optional
+        Path to config.yaml (used when --config is specified)
+    exp : str, optional
+        Experiment number ('1' or '2') — uses hardcoded paths
     """
 
     print("\n" + "="*70)
     print(" "*18 + "WINDOWING SMOKE TEST")
     print("="*70)
 
-    # Load config
-    config      = load_config(config_path)
-    window_size = config.window_size
-    stride      = config.stride
-    windows_dir = Path(config.output_dir) / 'windows'
+    runs_per_idv = {}
 
-    print(f"\n  Config:       {config_path}")
+    if exp is not None:
+        if exp not in EXPERIMENTS:
+            print(f"  Unknown experiment '{exp}'. Valid options: {list(EXPERIMENTS.keys())}")
+            sys.exit(1)
+        cfg          = EXPERIMENTS[exp]
+        windows_dir  = cfg['windows_dir']
+        window_size  = cfg['window_size']
+        stride       = cfg['stride']
+        splits       = cfg['splits']
+        runs_per_idv = cfg['runs_per_idv']
+        print(f"\n  Experiment:   {exp}")
+    else:
+        if config_path is None:
+            config_path = 'configs/config.yaml'
+        config      = load_config(config_path)
+        window_size = config.window_size
+        stride      = config.stride
+        windows_dir = Path(config.output_dir) / 'windows'
+        splits = ['train', 'test']
+        if config.val_runs > 0:
+            splits = ['train', 'val', 'test']
+        print(f"\n  Config:       {config_path}")
+
     print(f"  Windows dir:  {windows_dir}")
     print(f"  Window size:  {window_size}")
     print(f"  Stride:       {stride}")
+    print(f"  Splits:       {splits}")
 
     passed = 0
     failed = 0
@@ -257,13 +346,16 @@ def run_smoke_test(config_path: str = 'configs/config.yaml'):
     for check_name, check_fn in checks:
         try:
             if check_fn.__name__ == 'check_shapes':
-                check_fn(windows_dir, window_size, stride, {})
+                check_fn(windows_dir, window_size, stride, runs_per_idv, splits)
             else:
-                check_fn(windows_dir, window_size, stride)
+                check_fn(windows_dir, window_size, stride, splits)
             passed += 1
-        except AssertionError as e:
+        except AssertionError:
             failed += 1
             # Error already printed inside check function
+            if check_fn.__name__ == 'check_files_exist':
+                print("\n  ⚠  Files missing — skipping remaining checks.")
+                break
 
     # Final result
     total = passed + failed
@@ -284,15 +376,21 @@ def main():
     parser = argparse.ArgumentParser(
         description='Smoke test for TEP windowing output'
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        '--exp',
+        type=str,
+        choices=list(EXPERIMENTS.keys()),
+        help='Experiment number (e.g. --exp 1 or --exp 2)'
+    )
+    group.add_argument(
         '--config',
         type=str,
-        default='configs/config.yaml',
-        help='Path to config.yaml (default: configs/config.yaml)'
+        help='Path to config.yaml (fallback if --exp not used)'
     )
     args = parser.parse_args()
 
-    success = run_smoke_test(config_path=args.config)
+    success = run_smoke_test(config_path=args.config, exp=args.exp)
     sys.exit(0 if success else 1)
 
 
