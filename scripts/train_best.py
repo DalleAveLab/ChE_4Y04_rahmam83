@@ -4,7 +4,7 @@ Train KAN variants using tuned hyperparameters on the full dataset.
 
 This script is for Experiment 2: trains each model with hyperparameters found
 in Experiment 1 (saved as best_params.json) on the full dataset (no Optuna,
-no validation split, fixed number of epochs).
+no validation split). Training stops early when loss stops improving.
 
 Usage:
     python scripts/train_best.py --model wavelet_kan
@@ -33,35 +33,45 @@ from scripts.tune import seed_everything, VARIANT_PARAMS
 
 
 # ======================================================================
-# Training loop — fixed epochs, no early stopping, no val
+# Training loop — early stopping when loss stops improving
 # ======================================================================
-def train_fixed(model, train_loader, lr, max_epochs, device, seed, verbose=True):
+def train_early_stopping(model, train_loader, lr, max_epochs, patience, device, seed,
+                         weight_decay=0.0, min_delta=1e-4, verbose=True):
     """
-    Train model for a fixed number of epochs.
+    Train model until loss stops improving (early stopping on train loss).
 
-    No validation, no early stopping. Returns the final model state.
+    Stops when the training loss has not improved by more than `min_delta`
+    for `patience` consecutive epochs. Returns the best model state.
 
     Parameters
     ----------
     model       : nn.Module
     train_loader: DataLoader (shuffled)
     lr          : float — learning rate
-    max_epochs  : int   — exact number of epochs to train
+    max_epochs  : int   — upper bound on epochs
+    patience    : int   — stop after this many epochs with no improvement
     device      : torch.device
     seed        : int   — used to reset global torch state before training
+    weight_decay: float — L2 regularization (default 0.0)
+    min_delta   : float — minimum loss decrease to count as improvement
     verbose     : bool  — print epoch loss
 
     Returns
     -------
-    final_state : dict  — state_dict at the end of training
+    best_state  : dict  — state_dict at the epoch with lowest loss
+    epoch_losses: list  — per-epoch average training losses
     """
     torch.manual_seed(seed)
     model = model.to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
 
+    best_loss = float('inf')
+    best_state = None
+    epochs_no_improve = 0
     epoch_losses = []
+
     epoch_bar = tqdm(range(max_epochs), desc="    Training", unit="epoch",
                      disable=not verbose, dynamic_ncols=True)
     for epoch in epoch_bar:
@@ -80,9 +90,24 @@ def train_fixed(model, train_loader, lr, max_epochs, device, seed, verbose=True)
 
         avg_loss = total_loss / max(n_batches, 1)
         epoch_losses.append(avg_loss)
-        epoch_bar.set_postfix(loss=f"{avg_loss:.4f}")
 
-    return {k: v.cpu().clone() for k, v in model.state_dict().items()}, epoch_losses
+        if avg_loss < best_loss - min_delta:
+            best_loss = avg_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        epoch_bar.set_postfix(loss=f"{avg_loss:.4f}", best=f"{best_loss:.4f}",
+                              patience=f"{epochs_no_improve}/{patience}")
+
+        if epochs_no_improve >= patience:
+            if verbose:
+                tqdm.write(f"    Early stopping at epoch {epoch + 1} "
+                           f"(no improvement for {patience} epochs)")
+            break
+
+    return best_state, epoch_losses
 
 
 # ======================================================================
@@ -194,6 +219,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     variant_kwargs = {k: best_params[k]
                      for k in VARIANT_PARAMS.get(model_name, [])
                      if k in best_params}
+    wd = variant_kwargs.pop('weight_decay', 0.0)
     if model_name in ('rnn', 'lstm', 'cnn'):
         variant_kwargs['seq_len'] = config.window_size
 
@@ -210,18 +236,21 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     print(f"  Model parameters: {n_params:,}")
 
     # ------------------------------------------------------------------
-    # 5. Train for fixed epochs
+    # 5. Train with early stopping on train loss
     # ------------------------------------------------------------------
     max_epochs = config.max_epochs
-    print(f"\n  Training for {max_epochs} epochs (no early stopping)...")
+    patience   = config.early_stopping_patience
+    print(f"\n  Training (max {max_epochs} epochs, early-stop patience={patience})...")
     t0 = time.time()
 
-    final_state, epoch_losses = train_fixed(
+    final_state, epoch_losses = train_early_stopping(
         model, train_loader,
         lr=best_params['lr'],
         max_epochs=max_epochs,
+        patience=patience,
         device=device,
         seed=seed,
+        weight_decay=wd,
         verbose=True,
     )
 
@@ -261,7 +290,9 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
 
     metrics = {
         'test_accuracy': float(test_acc),
+        'epochs_trained': len(epoch_losses),
         'max_epochs': max_epochs,
+        'early_stopping_patience': patience,
         'best_params': best_params,
         'train_windows': int(X_train.shape[0]),
         'test_windows': int(X_test.shape[0]),
@@ -315,7 +346,7 @@ def main():
     print(f"  Output to:   {output_dir}")
     print(f"  Windows:     {windows_dir}")
     print(f"  Device:      {device}")
-    print(f"  Max epochs:  {config.max_epochs}")
+    print(f"  Max epochs:  {config.max_epochs} (early-stop patience={config.early_stopping_patience})")
     print("=" * 70)
 
     variants = list(MODEL_REGISTRY.keys()) if args.all else [args.model]

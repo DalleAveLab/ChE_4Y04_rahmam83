@@ -25,11 +25,8 @@ Eight models are implemented and evaluated as part of this project:
 | CNN | `cnn` | 1-D convolutional network with dropout |
 | RNN | `rnn` | Recurrent neural network with dropout |
 | LSTM | `lstm` | Long short-term memory network with dropout |
-| BayesianRNN | `bayesian_rnn` | Bayesian RNN with weight priors via Pyro SVI (see note below) |
 
-The KAN variants and standard ANN baselines (MLP, CNN, RNN, LSTM) are registered in `src/models/__init__.py` and share the same training pipeline (`tune.py`, `train_best.py`). **BayesianRNN is handled separately** — see the dedicated sections below.
-
-> **Why BayesianRNN has separate scripts:** Unlike the other models which are trained with standard cross-entropy loss and `torch.optim.Adam`, BayesianRNN places Normal(0,1) priors over all RNN and output layer weights and is trained using Pyro's Stochastic Variational Inference (SVI) with a `TraceMeanField_ELBO` objective and an `AutoNormal` variational guide. This requires a fundamentally different training loop (SVI steps, param store management, ELBO tracking) that is incompatible with the standard `tune.py` / `train_best.py` pipeline. Predictions are also made differently: instead of a single forward pass, logits are averaged over multiple posterior samples to produce stable softmax probabilities.
+All models are registered in `src/models/__init__.py` and share the same training pipeline (`tune.py`, `train_best.py`).
 
 ## Setup
 1) Install dependencies: python -m pip install -r requirements.txt
@@ -102,7 +99,7 @@ Outputs to `data/processed_N50_tr30_v10_te10/windows/`:
 - `test_windows_w5_s1.npz` — test windows
 
 ```bash
-# 3a. Tune all standard models (Optuna, 50 trials each)
+# 3. Tune all models (Optuna, 50 trials each)
 # KAN variants
 python scripts/tune.py --model efficient_kan
 python scripts/tune.py --model fourier_kan
@@ -119,18 +116,6 @@ Outputs per model to `results_N50_tr30_v10_te10/<model>/`:
 - `best_model.pt` — model retrained with best hyperparameters
 - `predictions.npz` — test set predictions (`y_pred`, `y_true`, `y_prob`, `Run_ID`, `start_idx`, `end_idx`)
 - `metrics.json` — val accuracy, training loss curve, trial count, best trial number
-
-```bash
-# 3b. Tune BayesianRNN (separate script — Pyro SVI, 50 trials)
-python scripts/tune_bayesian.py
-```
-Outputs to `results_N50_tr30_v10_te10/bayesian_rnn/`:
-- `best_params.json` — best hyperparameters
-- `best_model.pt` — model state dict retrained with best hyperparameters
-- `best_guide.pt` — Pyro variational parameters (AutoNormal guide state)
-- `predictions.npz` — test set predictions (`y_pred`, `y_true`) — note: `y_prob` not saved at this stage
-- `metrics.json` — test accuracy, val accuracy, trial count, posterior sample count
-- `bayesian_rnn_study.db` — SQLite Optuna study (resumable if interrupted)
 
 ```bash
 # 4. Evaluate results
@@ -193,11 +178,11 @@ Outputs to `data/processed_N200_tr160_v0_te40/windows/`:
 - `test_windows_w5_s1.npz` — test windows
 
 ```bash
-# 3a. Train all standard models with tuned hyperparameters (100 epochs, no early stopping)
-#     --params-dir points to best_params.json files from Experiment 1
+# 3. Train all models with tuned hyperparameters (early stopping on train loss)
+#    --params-dir points to best_params.json files from Experiment 1
 python scripts/train_best.py --all --params-dir results_N50_tr30_v10_te10
 ```
-This trains all 8 standard models (4 KAN variants + 4 ANN baselines) sequentially.
+This trains all 8 models (4 KAN variants + 4 ANN baselines) sequentially.
 To train a single model instead:
 ```bash
 python scripts/train_best.py --model wavelet_kan --params-dir results_N50_tr30_v10_te10
@@ -207,18 +192,6 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 - `best_model.pt` — final trained model weights
 - `predictions.npz` — test set predictions (`y_pred`, `y_true`, `y_prob`, `Run_ID`, `start_idx`, `end_idx`)
 - `metrics.json` — test accuracy, epoch count, training loss curve
-
-```bash
-# 3b. Train BayesianRNN with tuned hyperparameters (separate script — Pyro SVI)
-python scripts/train_best_bayesian.py --params-dir results_N50_tr30_v10_te10
-# Use more posterior samples for stable final evaluation (default: 100)
-python scripts/train_best_bayesian.py --params-dir results_N50_tr30_v10_te10 --n-samples 100
-```
-Outputs to `results_N200_tr160_v0_te40/bayesian_rnn/`:
-- `best_model.pt` — final model state dict
-- `best_guide.pt` — Pyro variational parameters required to reconstruct the posterior
-- `predictions.npz` — test set predictions (`y_pred`, `y_true`, `y_prob`, `Run_ID`, `start_idx`, `end_idx`)
-- `metrics.json` — test accuracy, epoch count, ELBO training curve, posterior sample count
 
 ```bash
 # 4. Evaluate results

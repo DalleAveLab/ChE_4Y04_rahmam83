@@ -5,7 +5,5 @@ optuna==4.7.0
 pandas==3.0.1
 PyYAML==6.0.3
 scikit_learn==1.8.0
-torch==2.5.1+cu121
 torch==2.6.0+cu124
 tqdm==4.67.3
-pyro-ppl

@@ -89,10 +89,10 @@ save_options:
 # e.g. Exp 1 (50r, 30/10/10) → data\processed_N50_tr30_v10_te10
 # e.g. Exp 2 (200r, 160/0/40) → data\processed_N200_tr160_v0_te40
 splits:
-  total_runs: 50             # Exp 1: 50 runs; Exp 2: 200
-  train_runs: 30             # Exp 1: 30; Exp 2: 160
-  val_runs: 10               # Exp 1: 10; Exp 2: 0
-  test_runs: 10              # Exp 1: 10; Exp 2: 40
+  total_runs: 200             # Exp 1: 50 runs; Exp 2: 200
+  train_runs: 160             # Exp 1: 30; Exp 2: 160
+  val_runs: 0                # Exp 1: 10; Exp 2: 0
+  test_runs: 40              # Exp 1: 10; Exp 2: 40
 
 # Scaling Options
 scaling:
@@ -169,7 +169,7 @@ tuning:
     spline_order:
       choices: [2, 3, 4]
 
-    # ANN models only (MLP, RNN, LSTM, CNN, BayesianRNN) — not used by KAN variants
+    # ANN models only (MLP, RNN, LSTM, CNN) — not used by KAN variants
     dropout_prob:
       min: 0.0
       max: 0.5
