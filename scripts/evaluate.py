@@ -184,7 +184,7 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         print(f"  WARNING: {preds_path} not found — skipping {variant}")
         return None
 
-    data = np.load(preds_path)
+    data = np.load(preds_path, allow_pickle=True)
     y_pred = data['y_pred']
     y_true = data['y_true']
     y_prob = data['y_prob'] if 'y_prob' in data else None  # (n_windows, n_classes)
@@ -601,6 +601,110 @@ def print_comparison_table(results: dict):
     print(f"{'='*120}")
 
 
+def save_alarm_metrics(results: dict, results_dir: Path):
+    """Write the alarm analysis tables to alarm_metrics.txt in the results directory."""
+    has_alarm_data = any(
+        m.get('false_alarm_rate') is not None or m.get('detection_rate') is not None
+        for m in results.values()
+    )
+    if not has_alarm_data:
+        return
+
+    lines = []
+    threshold = next(
+        (m['alarm_threshold'] for m in results.values() if 'alarm_threshold' in m),
+        0.90
+    )
+
+    lines.append("=" * 120)
+    lines.append(f"  Alarm Analysis  (threshold: fault_prob = 1 - P(class 0) > {threshold:.0%})")
+    lines.append("=" * 120)
+    lines.append(
+        f"\n  {'Model':<18s} {'False Alarm Rate':>18s} {'Correct Normal Rate':>20s} "
+        f"{'Detection Rate':>16s} {'Miss Rate':>12s} "
+        f"{'Mean Top-2 Margin':>20s} {'Ambiguous (<10pp)':>18s}"
+    )
+    lines.append(
+        f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}"
+    )
+    lines.append(
+        f"  {'':18s} {'(healthy → alarm)':>18s} {'(healthy → no alarm)':>20s} "
+        f"{'(fault → alarm)':>16s} {'(fault → no alarm)':>12s} "
+        f"{'(top1 - top2 prob)':>20s} {'(% windows)':>18s}"
+    )
+    lines.append(
+        f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}"
+    )
+
+    sanity_far = sanity_dr = None
+    for variant, m in results.items():
+        far    = m.get('false_alarm_rate')
+        cnr    = m.get('correct_normal_rate')
+        dr     = m.get('detection_rate')
+        mr     = m.get('miss_rate')
+        margin = m.get('mean_top2_margin')
+        ambig  = m.get('frac_ambiguous')
+        far_str    = f"{far:.4f} ({far*100:.1f}%)"        if far    is not None else "N/A"
+        cnr_str    = f"{cnr:.4f} ({cnr*100:.1f}%)"        if cnr    is not None else "N/A"
+        dr_str     = f"{dr:.4f} ({dr*100:.1f}%)"          if dr     is not None else "N/A"
+        mr_str     = f"{mr:.4f} ({mr*100:.1f}%)"          if mr     is not None else "N/A"
+        margin_str = f"{margin:.4f} ({margin*100:.1f}pp)"  if margin is not None else "N/A"
+        ambig_str  = f"{ambig*100:.1f}%"                   if ambig  is not None else "N/A"
+        lines.append(
+            f"  {variant:<18s} {far_str:>18s} {cnr_str:>20s} "
+            f"{dr_str:>16s} {mr_str:>12s} "
+            f"{margin_str:>20s} {ambig_str:>18s}"
+        )
+        if sanity_far is None and far is not None and cnr is not None:
+            sanity_far = far + cnr
+        if sanity_dr is None and dr is not None and mr is not None:
+            sanity_dr = dr + mr
+
+    if sanity_far is not None and sanity_dr is not None:
+        lines.append(
+            f"\n  Sanity check — FAR + CNR = {sanity_far:.6f}  |  FDR + MR = {sanity_dr:.6f}"
+            f"  (both should equal 1.000000)"
+        )
+
+    # Per-class FDR table
+    all_fault_classes = set()
+    for m in results.values():
+        all_fault_classes.update(m.get('per_class_detection_rate', {}).keys())
+    all_fault_classes = sorted(all_fault_classes)
+
+    if all_fault_classes:
+        lines.append(f"\n  Per-Class Detection Rate  (fault → alarm, threshold {threshold:.0%})")
+        class_labels = [f"IDV{c}" for c in all_fault_classes]
+        lines.append(f"\n  {'Model':<18s} " + " ".join(f"{cl:>7s}" for cl in class_labels))
+        lines.append(f"  {'-'*18} " + " ".join("-" * 7 for _ in class_labels))
+        for variant, m in results.items():
+            pcdr = m.get('per_class_detection_rate', {})
+            row = f"  {variant:<18s} "
+            row += " ".join(
+                f"{pcdr[c]:>7.3f}" if pcdr.get(c) is not None else f"{'N/A':>7s}"
+                for c in all_fault_classes
+            )
+            lines.append(row)
+
+        lines.append(f"\n  Weakest fault classes per model (FDR < 0.85):")
+        for variant, m in results.items():
+            pcdr = m.get('per_class_detection_rate', {})
+            weak = {c: v for c, v in pcdr.items() if v is not None and v < 0.85}
+            if weak:
+                weak_sorted = sorted(weak.items(), key=lambda x: x[1])
+                weak_str = ", ".join(f"IDV{c}={v:.3f}" for c, v in weak_sorted)
+                lines.append(f"    {variant:<18s}: {weak_str}")
+            else:
+                lines.append(f"    {variant:<18s}: None (all fault classes >= 0.85)")
+
+    lines.append("=" * 120)
+
+    out_path = results_dir / 'alarm_metrics.txt'
+    with open(out_path, 'w') as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"\n  Saved alarm metrics: {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Evaluate tuned KAN variants')
     parser.add_argument('--model', type=str, default=None,
@@ -628,6 +732,7 @@ def main():
             results[variant] = metrics
 
     print_comparison_table(results)
+    save_alarm_metrics(results, results_dir)
 
 
 if __name__ == '__main__':
