@@ -602,21 +602,71 @@ def print_comparison_table(results: dict):
 
 
 def save_alarm_metrics(results: dict, results_dir: Path):
-    """Write the alarm analysis tables to alarm_metrics.txt in the results directory."""
+    """Write model comparison and alarm analysis to model_scores_and_alarm_metrics.txt."""
+    if not results:
+        return
+
+    lines = []
+
+    # ==================================================================
+    # Section 1: Model Comparison
+    # ==================================================================
+    lines.append("=" * 120)
+    lines.append("  Model Comparison  (KAN Evaluation — TEP Fault Detection)")
+    lines.append("=" * 120)
+    lines.append(
+        f"\n  {'Model':<18s} {'Accuracy':>10s} {'Macro F1':>10s} "
+        f"{'Val Acc':>10s} {'Gap':>8s} {'Conf(Correct)':>14s} {'Conf(Wrong)':>12s} {'Best Params'}"
+    )
+    lines.append(f"  {'-'*18} {'-'*10} {'-'*10} {'-'*10} {'-'*8} {'-'*14} {'-'*12} {'-'*55}")
+
+    best_model = None
+    best_acc = -1.0
+    for variant, m in results.items():
+        acc = m['accuracy']
+        f1 = m['macro_f1']
+        val_acc = m.get('val_accuracy')
+        params_str = format_params_short(m.get('best_params', {}))
+        if val_acc is not None:
+            gap_str = f"{val_acc - acc:+.4f}"
+            val_str = f"{val_acc:.4f}"
+        else:
+            gap_str = "N/A"
+            val_str = "N/A"
+        cc = m.get('mean_conf_correct')
+        cw = m.get('mean_conf_wrong')
+        cc_str = f"{cc:.4f}" if cc is not None else "N/A"
+        cw_str = f"{cw:.4f}" if cw is not None else "N/A"
+        lines.append(
+            f"  {variant:<18s} {acc:>10.4f} {f1:>10.4f} "
+            f"{val_str:>10s} {gap_str:>8s} {cc_str:>14s} {cw_str:>12s} {params_str}"
+        )
+        if acc > best_acc:
+            best_acc = acc
+            best_model = variant
+
+    lines.append(f"\n  Best model: {best_model} (accuracy = {best_acc:.4f})")
+
     has_alarm_data = any(
         m.get('false_alarm_rate') is not None or m.get('detection_rate') is not None
         for m in results.values()
     )
     if not has_alarm_data:
+        out_path = results_dir / 'model_scores_and_alarm_metrics.txt'
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"\n  Saved: {out_path}")
         return
 
-    lines = []
     threshold = next(
         (m['alarm_threshold'] for m in results.values() if 'alarm_threshold' in m),
         0.90
     )
 
-    lines.append("=" * 120)
+    # ==================================================================
+    # Section 2: Alarm Analysis
+    # ==================================================================
+    lines.append(f"\n{'=' * 120}")
     lines.append(f"  Alarm Analysis  (threshold: fault_prob = 1 - P(class 0) > {threshold:.0%})")
     lines.append("=" * 120)
     lines.append(
@@ -699,10 +749,10 @@ def save_alarm_metrics(results: dict, results_dir: Path):
 
     lines.append("=" * 120)
 
-    out_path = results_dir / 'alarm_metrics.txt'
-    with open(out_path, 'w') as f:
+    out_path = results_dir / 'model_scores_and_alarm_metrics.txt'
+    with open(out_path, 'w', encoding='utf-8') as f:
         f.write("\n".join(lines) + "\n")
-    print(f"\n  Saved alarm metrics: {out_path}")
+    print(f"\n  Saved: {out_path}")
 
 
 def main():
