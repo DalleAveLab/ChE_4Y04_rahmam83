@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""
-Train KAN variants using tuned hyperparameters on the full dataset.
-
-This script is for Experiment 2: trains each model with hyperparameters found
-in Experiment 1 (saved as best_params.json) on the full dataset (no Optuna,
-no validation split). Training stops early when loss stops improving.
-
-Usage:
-    python scripts/train_best.py --model wavelet_kan
-    python scripts/train_best.py --all
-    python scripts/train_best.py --all --output-dir results_full --params-dir results
-"""
+# Train KAN variants using best_params.json from tuning (Exp 1) on the full dataset.
+# No Optuna, no val split — early stops on train loss.
+# Usage: python scripts/train_best.py --model wavelet_kan
+#        python scripts/train_best.py --all [--output-dir results_full --params-dir results]
 
 import sys
 import json
@@ -37,30 +29,7 @@ from scripts.tune import seed_everything, VARIANT_PARAMS
 # ======================================================================
 def train_early_stopping(model, train_loader, lr, max_epochs, patience, device, seed,
                          weight_decay=0.0, min_delta=1e-4, verbose=True):
-    """
-    Train model until loss stops improving (early stopping on train loss).
-
-    Stops when the training loss has not improved by more than `min_delta`
-    for `patience` consecutive epochs. Returns the best model state.
-
-    Parameters
-    ----------
-    model       : nn.Module
-    train_loader: DataLoader (shuffled)
-    lr          : float — learning rate
-    max_epochs  : int   — upper bound on epochs
-    patience    : int   — stop after this many epochs with no improvement
-    device      : torch.device
-    seed        : int   — used to reset global torch state before training
-    weight_decay: float — L2 regularization (default 0.0)
-    min_delta   : float — minimum loss decrease to count as improvement
-    verbose     : bool  — print epoch loss
-
-    Returns
-    -------
-    best_state  : dict  — state_dict at the epoch with lowest loss
-    epoch_losses: list  — per-epoch average training losses
-    """
+    """Early-stop on train loss; returns (best_state_dict, epoch_losses)."""
     torch.manual_seed(seed)
     model = model.to(device)
 
@@ -114,13 +83,7 @@ def train_early_stopping(model, train_loader, lr, max_epochs, patience, device, 
 # Evaluation helper (reuses tune.py logic)
 # ======================================================================
 def evaluate(model, loader, device):
-    """Return (accuracy, y_pred, y_true, y_prob).
-
-    y_prob : ndarray, shape (n_windows, n_classes)
-        Softmax probabilities for every window.
-        Fault probability for window i = 1 - y_prob[i, 0].
-        Confidence of predicted class  = y_prob[i, y_pred[i]].
-    """
+    """Return (accuracy, y_pred, y_true, y_prob) where y_prob is softmax over classes."""
     model.eval()
     all_preds, all_true, all_probs = [], [], []
     with torch.no_grad():
@@ -143,10 +106,7 @@ def evaluate(model, loader, device):
 # Train one model variant
 # ======================================================================
 def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, device):
-    """
-    Load best_params.json, train the model for max_epochs, evaluate on test.
-    Saves best_model.pt, predictions.npz, metrics.json to output_dir/model_name/.
-    """
+    """Train one variant with its tuned params and save results to output_dir/model_name/."""
     seed = config.random_seed
     ws   = config.window_size
     stride = config.stride
@@ -155,9 +115,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     print(f"  Training: {model_name}")
     print(f"{'='*70}")
 
-    # ------------------------------------------------------------------
-    # 1. Load best hyperparameters from Experiment 1
-    # ------------------------------------------------------------------
+    # Load best hyperparameters from tuning
     params_path = Path(params_dir) / model_name / 'best_params.json'
     if not params_path.exists():
         print(f"  ERROR: {params_path} not found — skipping {model_name}")
@@ -167,9 +125,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
         best_params = json.load(f)
     print(f"  Loaded params: {json.dumps(best_params)}")
 
-    # ------------------------------------------------------------------
-    # 2. Load train + test windows
-    # ------------------------------------------------------------------
+    # Load train + test windows
     train_npz = windows_dir / f'train_windows_w{ws}_s{stride}.npz'
     test_npz  = windows_dir / f'test_windows_w{ws}_s{stride}.npz'
 
@@ -194,9 +150,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     print(f"  Train: {X_train.shape[0]:,} windows | Test: {X_test.shape[0]:,}")
     print(f"  Input dim: {input_dim} | Output classes: {output_dim}")
 
-    # ------------------------------------------------------------------
-    # 3. Build DataLoaders
-    # ------------------------------------------------------------------
+    # DataLoaders
     batch_size   = config.batch_size
     num_workers  = config.num_workers
     persistent   = num_workers > 0
@@ -211,9 +165,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
                               num_workers=num_workers, persistent_workers=persistent,
                               pin_memory=pin)
 
-    # ------------------------------------------------------------------
-    # 4. Build model
-    # ------------------------------------------------------------------
+    # Build model from best params
     seed_everything(seed)
 
     variant_kwargs = {k: best_params[k]
@@ -235,9 +187,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Model parameters: {n_params:,}")
 
-    # ------------------------------------------------------------------
-    # 5. Train with early stopping on train loss
-    # ------------------------------------------------------------------
+    # Train
     max_epochs = config.max_epochs
     patience   = config.early_stopping_patience
     print(f"\n  Training (max {max_epochs} epochs, early-stop patience={patience})...")
@@ -257,17 +207,13 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
     elapsed = time.time() - t0
     print(f"\n  Training complete in {elapsed:.1f}s")
 
-    # ------------------------------------------------------------------
-    # 6. Evaluate on test set
-    # ------------------------------------------------------------------
+    # Evaluate on test set
     model.load_state_dict(final_state)
     model = model.to(device)
     test_acc, y_pred, y_true, y_prob = evaluate(model, test_loader, device)
     print(f"  Test accuracy: {test_acc:.4f}")
 
-    # ------------------------------------------------------------------
-    # 7. Save outputs
-    # ------------------------------------------------------------------
+    # Save outputs
     out_dir = Path(output_dir) / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
 

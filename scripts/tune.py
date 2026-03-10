@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""
-Optuna hyperparameter tuning for KAN variants on TEP fault detection.
-
-Usage:
-    python scripts/tune.py --model wavelet_kan --config configs/config.yaml
-"""
+# Optuna hyperparameter tuning for KAN variants on TEP fault detection.
+# Usage: python scripts/tune.py --model wavelet_kan --config configs/config.yaml
 
 import sys
 import json
@@ -78,14 +74,7 @@ def sample_variant_params(trial, model_name, search_space):
 # ======================================================================
 def train_model(model, train_loader, val_loader, lr, max_epochs, patience,
                 device, seed, weight_decay=0.0, verbose=False):
-    """
-    Train model with early stopping on validation accuracy.
-
-    Returns
-    -------
-    best_val_acc : float
-    best_state   : dict  — state_dict of the best epoch
-    """
+    """Train with early stopping; returns (best_val_acc, best_state_dict)."""
     torch.manual_seed(seed)
     model = model.to(device)
 
@@ -175,9 +164,7 @@ def main():
     print(f"  KAN Hyperparameter Tuning — {model_name}")
     print("=" * 70)
 
-    # ------------------------------------------------------------------
-    # 1. Load windowed data
-    # ------------------------------------------------------------------
+    # Load windowed data
     ws = config.window_size
     stride = config.stride
     windows_dir = Path(config.output_dir) / 'windows'
@@ -222,16 +209,12 @@ def main():
                              num_workers=num_workers, persistent_workers=persistent,
                              pin_memory=pin)
 
-    # ------------------------------------------------------------------
-    # 2. Search space
-    # ------------------------------------------------------------------
+    # Search space from config
     ss = config.tuning_search_space
     max_epochs = config.max_epochs
     patience = config.early_stopping_patience
 
-    # ------------------------------------------------------------------
-    # 3. Optuna objective
-    # ------------------------------------------------------------------
+    # Optuna objective
     def objective(trial):
         print(f"\n  --- Trial {trial.number + 1}/{config.n_trials} ---")
         torch.manual_seed(seed)
@@ -286,9 +269,7 @@ def main():
 
         return val_acc
 
-    # ------------------------------------------------------------------
-    # 4. Run Optuna study with SQLite persistence
-    # ------------------------------------------------------------------
+    # Run study with SQLite persistence so it can be resumed
     results_root = Path(config.results_dir)
     out_dir = results_root / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -339,9 +320,7 @@ def main():
     print(f"  Best params: {json.dumps(best_params, indent=2)}")
     print(f"{'='*70}")
 
-    # ------------------------------------------------------------------
-    # 5. Retrain best model from scratch
-    # ------------------------------------------------------------------
+    # Retrain best config from scratch on full train set
     print(f"\n  Retraining best model from scratch...")
 
     # Separate universal and variant-specific params
@@ -385,15 +364,11 @@ def main():
     best_model.load_state_dict(best_state)
     best_model = best_model.to(device)
 
-    # ------------------------------------------------------------------
-    # 6. Evaluate on test set
-    # ------------------------------------------------------------------
+    # Evaluate on held-out test set
     test_acc, y_pred, y_true = evaluate(best_model, test_loader, device)
     print(f"\n  Test accuracy: {test_acc:.4f}")
 
-    # ------------------------------------------------------------------
-    # 7. Save all outputs
-    # ------------------------------------------------------------------
+    # Save outputs
     # best_params.json
     params_path = out_dir / 'best_params.json'
     with open(params_path, 'w') as f:
