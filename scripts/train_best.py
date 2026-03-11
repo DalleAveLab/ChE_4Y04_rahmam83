@@ -4,11 +4,14 @@
 # Usage: python scripts/train_best.py --model wavelet_kan
 #        python scripts/train_best.py --all [--output-dir results_full --params-dir results]
 
+import os
 import sys
 import json
 import argparse
 import time
 from pathlib import Path
+
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
