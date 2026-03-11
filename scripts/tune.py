@@ -2,12 +2,15 @@
 # Optuna hyperparameter tuning for KAN variants on TEP fault detection.
 # Usage: python scripts/tune.py --model wavelet_kan --config configs/config.yaml
 
+import os
 import sys
 import json
 import argparse
 import time
 import random
 from pathlib import Path
+
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 # Project root on sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
