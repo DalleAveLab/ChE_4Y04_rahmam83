@@ -239,6 +239,7 @@ def train_one_variant(model_name, config, windows_dir, params_dir, output_dir, d
         'epochs_trained': len(epoch_losses),
         'max_epochs': max_epochs,
         'early_stopping_patience': patience,
+        'training_time_s': float(elapsed),
         'best_params': best_params,
         'train_windows': int(X_train.shape[0]),
         'test_windows': int(X_test.shape[0]),

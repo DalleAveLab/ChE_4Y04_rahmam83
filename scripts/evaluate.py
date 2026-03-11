@@ -277,6 +277,8 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         metrics['val_accuracy'] = tuning_metrics.get('val_accuracy')
         metrics['n_trials'] = tuning_metrics.get('n_trials')
         metrics['best_trial'] = tuning_metrics.get('best_trial')
+        metrics['epochs_trained'] = tuning_metrics.get('epochs_trained')
+        metrics['training_time_s'] = tuning_metrics.get('training_time_s')
 
         loss_curve = (tuning_metrics.get('train_loss_curve')
                       or tuning_metrics.get('train_elbo_curve'))
@@ -286,6 +288,8 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         metrics['val_accuracy'] = None
         metrics['n_trials'] = None
         metrics['best_trial'] = None
+        metrics['epochs_trained'] = None
+        metrics['training_time_s'] = None
 
     out_path = variant_dir / 'eval_metrics.json'
     with open(out_path, 'w') as f:
@@ -333,9 +337,10 @@ def save_alarm_metrics(results: dict, results_dir: Path):
     lines.append("=" * 120)
     lines.append(
         f"\n  {'Model':<18s} {'Accuracy':>10s} {'Macro F1':>10s} "
-        f"{'Val Acc':>10s} {'Gap':>8s} {'Conf(Correct)':>14s} {'Conf(Wrong)':>12s} {'Best Params'}"
+        f"{'Val Acc':>10s} {'Gap':>8s} {'Conf(Correct)':>14s} {'Conf(Wrong)':>12s} "
+        f"{'Epochs':>8s} {'Train Time':>12s} {'Best Params'}"
     )
-    lines.append(f"  {'-'*18} {'-'*10} {'-'*10} {'-'*10} {'-'*8} {'-'*14} {'-'*12} {'-'*55}")
+    lines.append(f"  {'-'*18} {'-'*10} {'-'*10} {'-'*10} {'-'*8} {'-'*14} {'-'*12} {'-'*8} {'-'*12} {'-'*55}")
 
     best_model = None
     best_acc = -1.0
@@ -354,9 +359,14 @@ def save_alarm_metrics(results: dict, results_dir: Path):
         cw = m.get('mean_conf_wrong')
         cc_str = f"{cc:.4f}" if cc is not None else "N/A"
         cw_str = f"{cw:.4f}" if cw is not None else "N/A"
+        ep = m.get('epochs_trained')
+        t  = m.get('training_time_s')
+        ep_str = str(ep) if ep is not None else "N/A"
+        t_str  = f"{t:.1f}s" if t is not None else "N/A"
         lines.append(
             f"  {variant:<18s} {acc:>10.4f} {f1:>10.4f} "
-            f"{val_str:>10s} {gap_str:>8s} {cc_str:>14s} {cw_str:>12s} {params_str}"
+            f"{val_str:>10s} {gap_str:>8s} {cc_str:>14s} {cw_str:>12s} "
+            f"{ep_str:>8s} {t_str:>12s} {params_str}"
         )
         if acc > best_acc:
             best_acc = acc
