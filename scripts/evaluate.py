@@ -133,7 +133,7 @@ def plot_time_series_per_fault(
         n_runs = len(runs_for_k)
         fig, ax = plt.subplots(figsize=(12, 4))
 
-        ax.plot(x_axis, mean_healthy, color='steelblue',  label='P(healthy)',    linewidth=1.0)
+        ax.plot(x_axis, mean_healthy, color='steelblue',  label='P(NOC)',    linewidth=1.0)
         ax.fill_between(x_axis,
                         mean_healthy - std_healthy,
                         mean_healthy + std_healthy,
