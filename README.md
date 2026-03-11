@@ -127,6 +127,9 @@ Outputs per model to `results_N50_tr30_v10_te10/<model>/`:
 - `confusion_matrix.png` — row-normalised confusion matrix heatmap
 - `time_series_IDV{k}.png` — probability time-series plot for each fault class (27 plots)
 
+Output to `results_N50_tr30_v10_te10/`:
+- `model_scores_and_alarm_metrics.txt` — cross-model comparison table (accuracy, macro F1, val accuracy, confidence, epochs, training time, best params), per-class F1 breakdown, alarm analysis (FAR, CNR, FDR, MR, top-2 margin), and per-class detection rates
+
 ---
 
 ## Experiment 2 — Full Dataset Training (200 runs/IDV)
@@ -203,6 +206,9 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 - `confusion_matrix.png` — row-normalised confusion matrix heatmap
 - `time_series_IDV{k}.png` — probability time-series plot for each fault class (27 plots)
 
+Output to `results_N200_tr160_v0_te40/`:
+- `model_scores_and_alarm_metrics.txt` — cross-model comparison table (accuracy, macro F1, val accuracy, confidence, epochs, training time, best params), per-class F1 breakdown, alarm analysis (FAR, CNR, FDR, MR, top-2 margin), and per-class detection rates
+
 ---
 
 ## Evaluation Outputs
@@ -213,8 +219,8 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 |---|---|
 | `accuracy` | Overall test accuracy |
 | `macro_f1` | Macro-averaged F1 score |
-| `per_class_f1` | F1 score for each class (dict keyed by class integer) |
-| `confusion_matrix` | Raw confusion matrix (list of lists) |
+| `per_class_f1` | F1 score for each class |
+| `confusion_matrix` | Raw confusion matrix |
 | `classes` | Ordered list of class integers present in the test set |
 | `mean_conf_correct` | Mean softmax confidence on correctly predicted windows |
 | `mean_conf_wrong` | Mean softmax confidence on incorrectly predicted windows |
@@ -223,7 +229,7 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 | `correct_normal_rate` | CNR — proportion of healthy windows correctly not alarmed (= 1 − FAR) |
 | `detection_rate` | FDR — proportion of fault windows that trigger alarm (all fault classes) |
 | `miss_rate` | MR — proportion of fault windows that do not trigger alarm (= 1 − FDR) |
-| `per_class_detection_rate` | FDR broken down by individual fault class IDV# (dict keyed by class integer) |
+| `per_class_detection_rate` | FDR broken down by individual fault class IDV# |
 | `mean_top2_margin` | Mean gap between top-1 and top-2 softmax probabilities |
 | `frac_ambiguous` | Fraction of windows where top-2 margin < 10 pp |
 
@@ -233,5 +239,3 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 FAR + CNR = 1.0   (all healthy windows accounted for)
 FDR + MR  = 1.0   (all fault windows accounted for)
 ```
-
-**Time-series plots** (`time_series_IDV{k}.png`): for each fault class, shows the mean ± 1 std of P(healthy) and P(IDV#) across all 40 test runs. P(healthy) is expected to dominate before timestep 600 (fault insertion) and collapse thereafter as P(IDV#) rises.
