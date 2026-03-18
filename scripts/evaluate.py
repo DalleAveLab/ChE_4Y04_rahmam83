@@ -86,9 +86,9 @@ def compute_timing_metrics(
     """
     Per-run fault timing metrics, all relative to fault_start:
 
-    FDT  — Fault Detection Time:
+    FDetT  — Fault Detection Time:
         First end_idx (after fault_start) where P(NOC) < detection_threshold.
-    FDiT — Fault Identification Time:
+    FDiagT — Fault Diagnosis Time:
         First end_idx (after fault_start) where any non-NOC class probability
         exceeds diagnosis_confidence.  (Online definition: ground-truth class
         unknown; model must commit to a specific fault with high confidence.)
@@ -96,8 +96,8 @@ def compute_timing_metrics(
     Returns
     -------
     dict  fault_class (int) ->
-        fdt_mean, fdt_std, fdt_detected, fdt_total,
-        fdit_mean, fdit_std, fdit_diagnosed, fdit_total
+        fdet_mean, fdet_std, fdet_detected, fdet_total,
+        fdiag_mean, fdiag_std, fdiag_diagnosed, fdiag_total
     All time values are in timesteps relative to fault_start.
     Runs where the criterion is never met contribute to *_total but not the mean.
     """
@@ -121,39 +121,39 @@ def compute_timing_metrics(
         p_all_f = p_all[post]
         x_f     = x[post]
 
-        # FDT: first crossing where P(NOC) drops below threshold
-        fdt_time = None
+        # FDetT: first crossing where P(NOC) drops below threshold
+        fdet_time = None
         det = np.where(p_noc_f < detection_threshold)[0]
         if len(det):
-            fdt_time = int(x_f[det[0]]) - fault_start
+            fdet_time = int(x_f[det[0]]) - fault_start
 
-        # FDiT: first crossing where any non-NOC class exceeds confidence
-        fdit_time = None
+        # FDiagT: first crossing where any non-NOC class exceeds confidence
+        fdiag_time = None
         max_fault_prob = p_all_f[:, 1:].max(axis=1)
         diag = np.where(max_fault_prob > diagnosis_confidence)[0]
         if len(diag):
-            fdit_time = int(x_f[diag[0]]) - fault_start
+            fdiag_time = int(x_f[diag[0]]) - fault_start
 
         if fault_k not in per_class:
-            per_class[fault_k] = {'fdt': [], 'fdit': []}
-        per_class[fault_k]['fdt'].append(fdt_time)
-        per_class[fault_k]['fdit'].append(fdit_time)
+            per_class[fault_k] = {'fdet': [], 'fdiag': []}
+        per_class[fault_k]['fdet'].append(fdet_time)
+        per_class[fault_k]['fdiag'].append(fdiag_time)
 
     timing: dict[int, dict] = {}
     for k in sorted(per_class):
-        fdt_all  = per_class[k]['fdt']
-        fdit_all = per_class[k]['fdit']
-        fdt_vals  = [t for t in fdt_all  if t is not None]
-        fdit_vals = [t for t in fdit_all if t is not None]
+        fdet_all  = per_class[k]['fdet']
+        fdiag_all = per_class[k]['fdiag']
+        fdet_vals  = [t for t in fdet_all  if t is not None]
+        fdiag_vals = [t for t in fdiag_all if t is not None]
         timing[k] = {
-            'fdt_mean':       float(np.mean(fdt_vals))  if fdt_vals  else None,
-            'fdt_std':        float(np.std(fdt_vals))   if fdt_vals  else None,
-            'fdt_detected':   len(fdt_vals),
-            'fdt_total':      len(fdt_all),
-            'fdit_mean':      float(np.mean(fdit_vals)) if fdit_vals else None,
-            'fdit_std':       float(np.std(fdit_vals))  if fdit_vals else None,
-            'fdit_diagnosed': len(fdit_vals),
-            'fdit_total':     len(fdit_all),
+            'fdet_mean':       float(np.mean(fdet_vals))  if fdet_vals  else None,
+            'fdet_std':        float(np.std(fdet_vals))   if fdet_vals  else None,
+            'fdet_detected':   len(fdet_vals),
+            'fdet_total':      len(fdet_all),
+            'fdiag_mean':      float(np.mean(fdiag_vals)) if fdiag_vals else None,
+            'fdiag_std':       float(np.std(fdiag_vals))  if fdiag_vals else None,
+            'fdiag_diagnosed': len(fdiag_vals),
+            'fdiag_total':     len(fdiag_all),
         }
 
     return timing
@@ -610,17 +610,17 @@ def save_alarm_metrics(results: dict, results_dir: Path):
         variant_list = [v for v in results if results[v].get('timing_metrics')]
 
         for metric_key, metric_label, detected_key, total_key in [
-            ('fdt_mean',  'Fault Detection Time (FDT)',       'fdt_detected',   'fdt_total'),
-            ('fdit_mean', 'Fault Identification Time (FDiT)', 'fdit_diagnosed', 'fdit_total'),
+            ('fdet_mean',  'Fault Detection Time (FDetT)',       'fdet_detected',   'fdet_total'),
+            ('fdiag_mean', 'Fault Diagnosis Time (FDiagT)',      'fdiag_diagnosed', 'fdiag_total'),
         ]:
             std_key = metric_key.replace('_mean', '_std')
 
             lines.append(f"\n{'=' * 120}")
             lines.append(f"  {metric_label}")
-            if metric_key == 'fdt_mean':
-                lines.append("  FDT  = first timestep (after fault insertion) where P(NOC) < 10%")
+            if metric_key == 'fdet_mean':
+                lines.append("  FDetT  = first timestep (after fault insertion) where P(NOC) < 10%")
             else:
-                lines.append("  FDiT = first timestep (after fault insertion) where max P(non-NOC) > 90%")
+                lines.append("  FDiagT = first timestep (after fault insertion) where max P(non-NOC) > 90%")
             lines.append("  Values are timesteps relative to fault insertion (t=600). "
                          "Runs where criterion never triggers are excluded from mean/std.")
             lines.append("=" * 120)
