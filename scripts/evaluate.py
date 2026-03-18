@@ -74,6 +74,91 @@ def plot_confusion_matrix(cm: np.ndarray, classes: list, variant: str, out_path:
     print(f"  Saved: {out_path}")
 
 
+def compute_timing_metrics(
+    y_prob:    np.ndarray,
+    run_ids:   np.ndarray,
+    start_idx: np.ndarray,
+    end_idx:   np.ndarray,
+    fault_start:          int   = 600,
+    detection_threshold:  float = 0.10,   # P(NOC) < this  → detection
+    diagnosis_confidence: float = 0.90,   # max P(non-NOC) > this → diagnosis
+) -> dict:
+    """
+    Per-run fault timing metrics, all relative to fault_start:
+
+    FDT  — Fault Detection Time:
+        First end_idx (after fault_start) where P(NOC) < detection_threshold.
+    FDiT — Fault Identification Time:
+        First end_idx (after fault_start) where any non-NOC class probability
+        exceeds diagnosis_confidence.  (Online definition: ground-truth class
+        unknown; model must commit to a specific fault with high confidence.)
+
+    Returns
+    -------
+    dict  fault_class (int) ->
+        fdt_mean, fdt_std, fdt_detected, fdt_total,
+        fdit_mean, fdit_std, fdit_diagnosed, fdit_total
+    All time values are in timesteps relative to fault_start.
+    Runs where the criterion is never met contribute to *_total but not the mean.
+    """
+    unique_run_ids = np.unique(run_ids)
+    per_class: dict[int, dict] = {}
+
+    for run_id in unique_run_ids:
+        fault_k = int(run_id.split('_')[0][3:])
+        if fault_k == 0:
+            continue
+
+        mask  = run_ids == run_id
+        order = np.argsort(start_idx[mask])
+        p_noc = y_prob[mask, 0][order]
+        p_all = y_prob[mask][order]        # (n_windows, n_classes)
+        x     = end_idx[mask][order]
+
+        # Only windows whose end falls after fault insertion
+        post = x >= fault_start
+        p_noc_f = p_noc[post]
+        p_all_f = p_all[post]
+        x_f     = x[post]
+
+        # FDT: first crossing where P(NOC) drops below threshold
+        fdt_time = None
+        det = np.where(p_noc_f < detection_threshold)[0]
+        if len(det):
+            fdt_time = int(x_f[det[0]]) - fault_start
+
+        # FDiT: first crossing where any non-NOC class exceeds confidence
+        fdit_time = None
+        max_fault_prob = p_all_f[:, 1:].max(axis=1)
+        diag = np.where(max_fault_prob > diagnosis_confidence)[0]
+        if len(diag):
+            fdit_time = int(x_f[diag[0]]) - fault_start
+
+        if fault_k not in per_class:
+            per_class[fault_k] = {'fdt': [], 'fdit': []}
+        per_class[fault_k]['fdt'].append(fdt_time)
+        per_class[fault_k]['fdit'].append(fdit_time)
+
+    timing: dict[int, dict] = {}
+    for k in sorted(per_class):
+        fdt_all  = per_class[k]['fdt']
+        fdit_all = per_class[k]['fdit']
+        fdt_vals  = [t for t in fdt_all  if t is not None]
+        fdit_vals = [t for t in fdit_all if t is not None]
+        timing[k] = {
+            'fdt_mean':       float(np.mean(fdt_vals))  if fdt_vals  else None,
+            'fdt_std':        float(np.std(fdt_vals))   if fdt_vals  else None,
+            'fdt_detected':   len(fdt_vals),
+            'fdt_total':      len(fdt_all),
+            'fdit_mean':      float(np.mean(fdit_vals)) if fdit_vals else None,
+            'fdit_std':       float(np.std(fdit_vals))  if fdit_vals else None,
+            'fdit_diagnosed': len(fdit_vals),
+            'fdit_total':     len(fdit_all),
+        }
+
+    return timing
+
+
 def plot_time_series_per_fault(
     y_prob:    np.ndarray,
     y_true:    np.ndarray,
@@ -253,13 +338,20 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     variant_dir = results_dir / variant
     plot_confusion_matrix(cm, classes, variant, variant_dir / 'confusion_matrix.png')
 
-    # Time-series probability plots (requires Run_ID metadata)
+    # Time-series probability plots and timing metrics (requires Run_ID metadata)
     if all(k in data for k in ('Run_ID', 'start_idx', 'end_idx')) and y_prob is not None:
         plot_time_series_per_fault(
             y_prob, y_true,
             data['Run_ID'], data['start_idx'], data['end_idx'],
             variant, variant_dir,
         )
+        timing = compute_timing_metrics(
+            y_prob,
+            data['Run_ID'], data['start_idx'], data['end_idx'],
+        )
+        metrics['timing_metrics'] = {str(k): v for k, v in timing.items()}
+    else:
+        metrics['timing_metrics'] = {}
 
     # Best params from tuning
     params_path = variant_dir / 'best_params.json'
@@ -505,6 +597,71 @@ def save_alarm_metrics(results: dict, results_dir: Path):
                 lines.append(f"    {variant:<18s}: {weak_str}")
             else:
                 lines.append(f"    {variant:<18s}: None (all fault classes >= 0.85)")
+
+    # ── Fault Timing Metrics ──────────────────────────────────────────────────
+    has_timing = any(m.get('timing_metrics') for m in results.values())
+    if has_timing:
+        # Collect all fault classes across models
+        all_timing_classes = set()
+        for m in results.values():
+            all_timing_classes.update(int(k) for k in m.get('timing_metrics', {}))
+        all_timing_classes = sorted(all_timing_classes)
+
+        variant_list = [v for v in results if results[v].get('timing_metrics')]
+
+        for metric_key, metric_label, detected_key, total_key in [
+            ('fdt_mean',  'Fault Detection Time (FDT)',       'fdt_detected',   'fdt_total'),
+            ('fdit_mean', 'Fault Identification Time (FDiT)', 'fdit_diagnosed', 'fdit_total'),
+        ]:
+            std_key = metric_key.replace('_mean', '_std')
+
+            lines.append(f"\n{'=' * 120}")
+            lines.append(f"  {metric_label}")
+            if metric_key == 'fdt_mean':
+                lines.append("  FDT  = first timestep (after fault insertion) where P(NOC) < 10%")
+            else:
+                lines.append("  FDiT = first timestep (after fault insertion) where max P(non-NOC) > 90%")
+            lines.append("  Values are timesteps relative to fault insertion (t=600). "
+                         "Runs where criterion never triggers are excluded from mean/std.")
+            lines.append("=" * 120)
+
+            col_w = 22
+            header = f"  {'Fault':<8s}" + "".join(f"{v:<{col_w}s}" for v in variant_list)
+            lines.append(f"\n{header}")
+            lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
+
+            for k in all_timing_classes:
+                sk = str(k)
+                row = f"  IDV{k:<4d}"
+                for v in variant_list:
+                    tm = results[v].get('timing_metrics', {}).get(sk, {})
+                    mean = tm.get(metric_key)
+                    std  = tm.get(std_key)
+                    n    = tm.get(detected_key, 0)
+                    tot  = tm.get(total_key, 0)
+                    if mean is not None:
+                        cell = f"{mean:.1f}±{std:.1f} ({n}/{tot})"
+                    else:
+                        cell = f"N/A (0/{tot})"
+                    row += f"{cell:<{col_w}s}"
+                lines.append(row)
+
+            # Overall: mean of per-class means (classes with at least one detection)
+            lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
+            row = f"  {'Overall':<8s}"
+            for v in variant_list:
+                tm_all = results[v].get('timing_metrics', {})
+                means = [
+                    tm_all[sk][metric_key]
+                    for sk in tm_all
+                    if tm_all[sk].get(metric_key) is not None
+                ]
+                if means:
+                    cell = f"{np.mean(means):.1f}±{np.std(means):.1f}"
+                else:
+                    cell = "N/A"
+                row += f"{cell:<{col_w}s}"
+            lines.append(row)
 
     lines.append("=" * 120)
 
