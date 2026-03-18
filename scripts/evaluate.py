@@ -20,6 +20,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from configs.config_loader import load_config
+from scripts.plot_time_series import plot_time_series_per_fault
 
 ALL_VARIANTS = [
     'efficient_kan', 'fourier_kan', 'wavelet_kan', 'fast_kan',
@@ -128,127 +129,45 @@ def compute_timing_metrics(
             fdet_time = int(x_f[det[0]]) - fault_start
 
         # FDiagT: first crossing where any non-NOC class exceeds confidence
-        fdiag_time = None
+        fdiag_time   = None
+        fdiag_correct = False
         max_fault_prob = p_all_f[:, 1:].max(axis=1)
         diag = np.where(max_fault_prob > diagnosis_confidence)[0]
         if len(diag):
             fdiag_time = int(x_f[diag[0]]) - fault_start
+            # Check whether the confident class matches the true fault
+            predicted_class = int(np.argmax(p_all_f[diag[0]]))
+            fdiag_correct = (predicted_class == fault_k)
 
         if fault_k not in per_class:
-            per_class[fault_k] = {'fdet': [], 'fdiag': []}
+            per_class[fault_k] = {'fdet': [], 'fdiag': [], 'fdiag_correct': []}
         per_class[fault_k]['fdet'].append(fdet_time)
         per_class[fault_k]['fdiag'].append(fdiag_time)
+        per_class[fault_k]['fdiag_correct'].append(fdiag_correct if fdiag_time is not None else None)
 
     timing: dict[int, dict] = {}
     for k in sorted(per_class):
-        fdet_all  = per_class[k]['fdet']
-        fdiag_all = per_class[k]['fdiag']
+        fdet_all         = per_class[k]['fdet']
+        fdiag_all        = per_class[k]['fdiag']
+        fdiag_correct_all = per_class[k]['fdiag_correct']
         fdet_vals  = [t for t in fdet_all  if t is not None]
         fdiag_vals = [t for t in fdiag_all if t is not None]
+        n_correct  = sum(1 for v in fdiag_correct_all if v is True)
+        n_diagnosed = len(fdiag_vals)
         timing[k] = {
-            'fdet_mean':       float(np.mean(fdet_vals))  if fdet_vals  else None,
-            'fdet_std':        float(np.std(fdet_vals))   if fdet_vals  else None,
-            'fdet_detected':   len(fdet_vals),
-            'fdet_total':      len(fdet_all),
-            'fdiag_mean':      float(np.mean(fdiag_vals)) if fdiag_vals else None,
-            'fdiag_std':       float(np.std(fdiag_vals))  if fdiag_vals else None,
-            'fdiag_diagnosed': len(fdiag_vals),
-            'fdiag_total':     len(fdiag_all),
+            'fdet_mean':        float(np.mean(fdet_vals))  if fdet_vals  else None,
+            'fdet_std':         float(np.std(fdet_vals))   if fdet_vals  else None,
+            'fdet_detected':    len(fdet_vals),
+            'fdet_total':       len(fdet_all),
+            'fdiag_mean':       float(np.mean(fdiag_vals)) if fdiag_vals else None,
+            'fdiag_std':        float(np.std(fdiag_vals))  if fdiag_vals else None,
+            'fdiag_diagnosed':  n_diagnosed,
+            'fdiag_total':      len(fdiag_all),
+            'fdiag_correct':    n_correct,
+            'fdiag_accuracy':   float(n_correct / n_diagnosed) if n_diagnosed else None,
         }
 
     return timing
-
-
-def plot_time_series_per_fault(
-    y_prob:    np.ndarray,
-    y_true:    np.ndarray,
-    run_ids:   np.ndarray,
-    start_idx: np.ndarray,
-    end_idx:   np.ndarray,
-    variant:   str,
-    out_dir:   Path,
-    fault_start: int = 600,
-) -> None:
-    """
-    For each fault class present in run_ids, average P(healthy) and P(IDV#)
-    across all runs of that class and save a time-series plot as PNG.
-
-    Expected pattern: P(healthy) dominates before fault_start, then collapses
-    as P(IDV#) rises.
-    """
-    # Parse fault classes from Run_ID strings (format: 'IDV{k}_Run{n}')
-    unique_run_ids = np.unique(run_ids)
-    fault_classes = sorted(set(
-        int(rid.split('_')[0][3:]) for rid in unique_run_ids
-    ))
-
-    for k in fault_classes:
-        prefix = f'IDV{k}_'
-        runs_for_k = [rid for rid in unique_run_ids if rid.startswith(prefix)]
-        if not runs_for_k:
-            continue
-
-        healthy_curves = []
-        fault_curves   = []
-        x_axis         = None
-
-        for run_id in sorted(runs_for_k):
-            mask = run_ids == run_id
-            # Sort windows within this run by start position
-            order = np.argsort(start_idx[mask])
-            p_healthy = y_prob[mask, 0][order]
-            p_fault   = y_prob[mask, k][order]
-            x         = end_idx[mask][order]
-            healthy_curves.append(p_healthy)
-            fault_curves.append(p_fault)
-            if x_axis is None:
-                x_axis = x
-
-        # Stack → (n_runs, n_windows_per_run); trim to minimum length across runs
-        min_len = min(len(c) for c in healthy_curves)
-        healthy_mat = np.stack([c[:min_len] for c in healthy_curves])
-        fault_mat   = np.stack([c[:min_len] for c in fault_curves])
-        x_axis      = x_axis[:min_len]
-
-        mean_healthy = healthy_mat.mean(axis=0)
-        std_healthy  = healthy_mat.std(axis=0)
-        mean_fault   = fault_mat.mean(axis=0)
-        std_fault    = fault_mat.std(axis=0)
-
-        n_runs = len(runs_for_k)
-        fig, ax = plt.subplots(figsize=(12, 4))
-
-        ax.plot(x_axis, mean_healthy, color='steelblue',  label='P(NOC)',    linewidth=1.0)
-        ax.fill_between(x_axis,
-                        mean_healthy - std_healthy,
-                        mean_healthy + std_healthy,
-                        alpha=0.2, color='steelblue')
-
-        ax.plot(x_axis, mean_fault,   color='darkorange', label=f'P(IDV{k})',    linewidth=1.0)
-        ax.fill_between(x_axis,
-                        mean_fault - std_fault,
-                        mean_fault + std_fault,
-                        alpha=0.2, color='darkorange')
-
-        ax.axvline(x=fault_start, color='red', linestyle='--', linewidth=1.2,
-                   label=f'Fault inserted (t={fault_start})')
-
-        ax.set_xlim(x_axis[0], x_axis[-1])
-        ax.set_ylim(-0.05, 1.05)
-        ax.set_xlabel('Timestep (end of window)', fontsize=10)
-        ax.set_ylabel('Softmax probability', fontsize=10)
-        ax.set_title(
-            f'{variant} — IDV{k}: Mean probability over {n_runs} test runs (±1 std)',
-            fontsize=11
-        )
-        ax.legend(fontsize=9, loc='center right')
-        ax.grid(True, alpha=0.3)
-
-        fig.tight_layout()
-        out_path = out_dir / f'time_series_IDV{k}.png'
-        fig.savefig(out_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f"  Saved: {out_path}")
 
 
 def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
@@ -662,6 +581,47 @@ def save_alarm_metrics(results: dict, results_dir: Path):
                     cell = "N/A"
                 row += f"{cell:<{col_w}s}"
             lines.append(row)
+
+        # Diagnosis accuracy table
+        lines.append(f"\n{'=' * 120}")
+        lines.append("  Fault Diagnosis Accuracy")
+        lines.append("  Of the runs where FDiagT triggered, fraction where the confident class matched the true fault.")
+        lines.append("  Format: correct/diagnosed (accuracy%)")
+        lines.append("=" * 120)
+
+        col_w = 22
+        header = f"  {'Fault':<8s}" + "".join(f"{v:<{col_w}s}" for v in variant_list)
+        lines.append(f"\n{header}")
+        lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
+
+        for k in all_timing_classes:
+            sk = str(k)
+            row = f"  IDV{k:<4d}"
+            for v in variant_list:
+                tm = results[v].get('timing_metrics', {}).get(sk, {})
+                correct   = tm.get('fdiag_correct', 0)
+                diagnosed = tm.get('fdiag_diagnosed', 0)
+                acc       = tm.get('fdiag_accuracy')
+                if diagnosed > 0 and acc is not None:
+                    cell = f"{correct}/{diagnosed} ({acc:.0%})"
+                else:
+                    cell = f"N/A"
+                row += f"{cell:<{col_w}s}"
+            lines.append(row)
+
+        # Overall accuracy across all fault classes
+        lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
+        row = f"  {'Overall':<8s}"
+        for v in variant_list:
+            tm_all = results[v].get('timing_metrics', {})
+            total_correct   = sum(tm_all[sk].get('fdiag_correct',   0) for sk in tm_all)
+            total_diagnosed = sum(tm_all[sk].get('fdiag_diagnosed', 0) for sk in tm_all)
+            if total_diagnosed > 0:
+                cell = f"{total_correct}/{total_diagnosed} ({total_correct/total_diagnosed:.0%})"
+            else:
+                cell = "N/A"
+            row += f"{cell:<{col_w}s}"
+        lines.append(row)
 
     lines.append("=" * 120)
 
