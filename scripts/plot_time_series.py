@@ -4,6 +4,7 @@
 # and saves a PNG showing mean ± 1 std with fault insertion marker.
 
 import sys
+import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -104,3 +105,40 @@ def plot_time_series_per_fault(
         fig.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  Saved: {out_path}")
+
+
+def main():
+    from configs.config_loader import load_config
+    from scripts.evaluate import ALL_VARIANTS
+
+    parser = argparse.ArgumentParser(description='Generate time-series probability plots for TEP variants')
+    parser.add_argument('--model', type=str, default=None,
+                        choices=ALL_VARIANTS,
+                        help='Plot a single variant (default: all)')
+    parser.add_argument('--config', type=str, default='configs/config.yaml',
+                        help='Path to config file')
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    results_dir = Path(config.results_dir)
+    variants = [args.model] if args.model else ALL_VARIANTS
+
+    for variant in variants:
+        preds_path = results_dir / variant / 'predictions.npz'
+        if not preds_path.exists():
+            print(f"  WARNING: {preds_path} not found — skipping {variant}")
+            continue
+        data = np.load(preds_path, allow_pickle=True)
+        if not all(k in data for k in ('y_prob', 'y_true', 'Run_ID', 'start_idx', 'end_idx')):
+            print(f"  WARNING: {variant} predictions.npz missing metadata — skipping")
+            continue
+        print(f"\n  Plotting: {variant}")
+        plot_time_series_per_fault(
+            data['y_prob'], data['y_true'],
+            data['Run_ID'], data['start_idx'], data['end_idx'],
+            variant, results_dir / variant,
+        )
+
+
+if __name__ == '__main__':
+    main()

@@ -20,7 +20,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from configs.config_loader import load_config
-from scripts.plot_time_series import plot_time_series_per_fault
 
 ALL_VARIANTS = [
     'efficient_kan', 'fourier_kan', 'wavelet_kan', 'fast_kan',
@@ -257,13 +256,8 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     variant_dir = results_dir / variant
     plot_confusion_matrix(cm, classes, variant, variant_dir / 'confusion_matrix.png')
 
-    # Time-series probability plots and timing metrics (requires Run_ID metadata)
+    # Timing metrics (requires Run_ID metadata)
     if all(k in data for k in ('Run_ID', 'start_idx', 'end_idx')) and y_prob is not None:
-        plot_time_series_per_fault(
-            y_prob, y_true,
-            data['Run_ID'], data['start_idx'], data['end_idx'],
-            variant, variant_dir,
-        )
         timing = compute_timing_metrics(
             y_prob,
             data['Run_ID'], data['start_idx'], data['end_idx'],
