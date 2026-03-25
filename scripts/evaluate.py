@@ -635,6 +635,20 @@ def save_alarm_metrics(results: dict, results_dir: Path):
             row += f"{cell:<{col_w}s}"
         lines.append(row)
 
+        # Overall accuracy excluding IDV15
+        row = f"  {'Overall*':<8s}"
+        for v in variant_list:
+            tm_all = results[v].get('timing_metrics', {})
+            total_correct   = sum(tm_all[sk].get('fdiag_correct',   0) for sk in tm_all if int(sk) != 15)
+            total_diagnosed = sum(tm_all[sk].get('fdiag_diagnosed', 0) for sk in tm_all if int(sk) != 15)
+            if total_diagnosed > 0:
+                cell = f"{total_correct}/{total_diagnosed} ({total_correct/total_diagnosed:.0%})"
+            else:
+                cell = "N/A"
+            row += f"{cell:<{col_w}s}"
+        lines.append(row)
+        lines.append("  * excludes IDV15")
+
     lines.append("=" * 120)
 
     out_path = results_dir / 'model_scores_and_alarm_metrics.txt'
