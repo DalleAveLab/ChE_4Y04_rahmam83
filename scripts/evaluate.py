@@ -158,10 +158,12 @@ def compute_timing_metrics(
             'fdet_std':         float(np.std(fdet_vals))   if fdet_vals  else None,
             'fdet_detected':    len(fdet_vals),
             'fdet_total':       len(fdet_all),
+            'fdet_times':       fdet_vals,
             'fdiag_mean':       float(np.mean(fdiag_vals)) if fdiag_vals else None,
             'fdiag_std':        float(np.std(fdiag_vals))  if fdiag_vals else None,
             'fdiag_diagnosed':  n_diagnosed,
             'fdiag_total':      len(fdiag_all),
+            'fdiag_times':      fdiag_vals,
             'fdiag_correct':    n_correct,
             'fdiag_accuracy':   float(n_correct / n_diagnosed) if n_diagnosed else None,
         }
@@ -559,22 +561,38 @@ def save_alarm_metrics(results: dict, results_dir: Path):
                     row += f"{cell:<{col_w}s}"
                 lines.append(row)
 
-            # Overall: mean of per-class means (classes with at least one detection)
+            # Overall: pool all individual run times across all fault classes
+            times_key = metric_key.replace('_mean', '_times')
             lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
             row = f"  {'Overall':<8s}"
             for v in variant_list:
                 tm_all = results[v].get('timing_metrics', {})
-                means = [
-                    tm_all[sk][metric_key]
-                    for sk in tm_all
-                    if tm_all[sk].get(metric_key) is not None
-                ]
-                if means:
-                    cell = f"{np.mean(means):.1f}±{np.std(means):.1f}"
+                all_times = []
+                for sk in tm_all:
+                    all_times.extend(tm_all[sk].get(times_key, []))
+                if all_times:
+                    cell = f"{np.mean(all_times):.1f}±{np.std(all_times):.1f}"
                 else:
                     cell = "N/A"
                 row += f"{cell:<{col_w}s}"
             lines.append(row)
+
+            # Overall excl. IDV15
+            row = f"  {'Overall*':<8s}"
+            for v in variant_list:
+                tm_all = results[v].get('timing_metrics', {})
+                all_times = []
+                for sk in tm_all:
+                    if int(sk) == 15:
+                        continue
+                    all_times.extend(tm_all[sk].get(times_key, []))
+                if all_times:
+                    cell = f"{np.mean(all_times):.1f}±{np.std(all_times):.1f}"
+                else:
+                    cell = "N/A"
+                row += f"{cell:<{col_w}s}"
+            lines.append(row)
+            lines.append("  * excludes IDV15")
 
         # Diagnosis accuracy table
         lines.append(f"\n{'=' * 120}")
