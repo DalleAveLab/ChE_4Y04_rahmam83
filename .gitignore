@@ -11,6 +11,8 @@ data/
 results_N50_tr30_v10_te10/
 results_N200_tr160_v0_te40/
 
+# Smoke Tests for Det and Diag Times
+tests/smoke_test_*/
 
 # Environment files
 .env
