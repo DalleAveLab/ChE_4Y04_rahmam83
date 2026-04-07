@@ -89,9 +89,8 @@ def compute_timing_metrics(
     FDetT  — Fault Detection Time:
         First end_idx (after fault_start) where P(NOC) < detection_threshold.
     FDiagT — Fault Diagnosis Time:
-        First end_idx (after fault_start) where any non-NOC class probability
-        exceeds diagnosis_confidence.  (Online definition: ground-truth class
-        unknown; model must commit to a specific fault with high confidence.)
+        First end_idx (after fault_start) where the probability of the TRUE
+        fault class exceeds diagnosis_confidence.
 
     Returns
     -------
@@ -127,16 +126,14 @@ def compute_timing_metrics(
         if len(det):
             fdet_time = int(x_f[det[0]]) - fault_start
 
-        # FDiagT: first crossing where any non-NOC class exceeds confidence
-        fdiag_time   = None
+        # FDiagT: first crossing where the TRUE fault class exceeds confidence
+        fdiag_time    = None
         fdiag_correct = False
-        max_fault_prob = p_all_f[:, 1:].max(axis=1)
-        diag = np.where(max_fault_prob > diagnosis_confidence)[0]
+        correct_class_prob = p_all_f[:, fault_k]
+        diag = np.where(correct_class_prob > diagnosis_confidence)[0]
         if len(diag):
-            fdiag_time = int(x_f[diag[0]]) - fault_start
-            # Check whether the confident class matches the true fault
-            predicted_class = int(np.argmax(p_all_f[diag[0]]))
-            fdiag_correct = (predicted_class == fault_k)
+            fdiag_time    = int(x_f[diag[0]]) - fault_start
+            fdiag_correct = True
 
         if fault_k not in per_class:
             per_class[fault_k] = {'fdet': [], 'fdiag': [], 'fdiag_correct': []}
@@ -151,8 +148,9 @@ def compute_timing_metrics(
         fdiag_correct_all = per_class[k]['fdiag_correct']
         fdet_vals  = [t for t in fdet_all  if t is not None]
         fdiag_vals = [t for t in fdiag_all if t is not None]
-        n_correct  = sum(1 for v in fdiag_correct_all if v is True)
+        n_correct   = sum(1 for v in fdiag_correct_all if v is True)
         n_diagnosed = len(fdiag_vals)
+        n_total     = len(fdiag_all)
         timing[k] = {
             'fdet_mean':        float(np.mean(fdet_vals))  if fdet_vals  else None,
             'fdet_std':         float(np.std(fdet_vals))   if fdet_vals  else None,
@@ -162,10 +160,10 @@ def compute_timing_metrics(
             'fdiag_mean':       float(np.mean(fdiag_vals)) if fdiag_vals else None,
             'fdiag_std':        float(np.std(fdiag_vals))  if fdiag_vals else None,
             'fdiag_diagnosed':  n_diagnosed,
-            'fdiag_total':      len(fdiag_all),
+            'fdiag_total':      n_total,
             'fdiag_times':      fdiag_vals,
             'fdiag_correct':    n_correct,
-            'fdiag_accuracy':   float(n_correct / n_diagnosed) if n_diagnosed else None,
+            'fdiag_accuracy':   float(n_correct / n_total) if n_total else None,
         }
 
     return timing
@@ -535,7 +533,7 @@ def save_alarm_metrics(results: dict, results_dir: Path):
             if metric_key == 'fdet_mean':
                 lines.append("  FDetT  = first timestep (after fault insertion) where P(NOC) < 10%")
             else:
-                lines.append("  FDiagT = first timestep (after fault insertion) where max P(non-NOC) > 90%")
+                lines.append("  FDiagT = first timestep (after fault insertion) where P(true fault class) > 90%")
             lines.append("  Values are timesteps relative to fault insertion (t=600). "
                          "Runs where criterion never triggers are excluded from mean/std.")
             lines.append("=" * 120)
@@ -597,8 +595,8 @@ def save_alarm_metrics(results: dict, results_dir: Path):
         # Diagnosis accuracy table
         lines.append(f"\n{'=' * 120}")
         lines.append("  Fault Diagnosis Accuracy")
-        lines.append("  Of the runs where FDiagT triggered, fraction where the confident class matched the true fault.")
-        lines.append("  Format: correct/diagnosed (accuracy%)")
+        lines.append("  Fraction of ALL runs where P(true fault class) first exceeded the diagnosis threshold.")
+        lines.append("  Format: correctly_diagnosed/total (accuracy%)")
         lines.append("=" * 120)
 
         col_w = 22
@@ -611,11 +609,11 @@ def save_alarm_metrics(results: dict, results_dir: Path):
             row = f"  IDV{k:<4d}"
             for v in variant_list:
                 tm = results[v].get('timing_metrics', {}).get(sk, {})
-                correct   = tm.get('fdiag_correct', 0)
-                diagnosed = tm.get('fdiag_diagnosed', 0)
-                acc       = tm.get('fdiag_accuracy')
-                if diagnosed > 0 and acc is not None:
-                    cell = f"{correct}/{diagnosed} ({acc:.0%})"
+                correct = tm.get('fdiag_correct', 0)
+                total   = tm.get('fdiag_total', 0)
+                acc     = tm.get('fdiag_accuracy')
+                if total > 0 and acc is not None:
+                    cell = f"{correct}/{total} ({acc:.0%})"
                 else:
                     cell = f"N/A"
                 row += f"{cell:<{col_w}s}"
@@ -626,10 +624,10 @@ def save_alarm_metrics(results: dict, results_dir: Path):
         row = f"  {'Overall':<8s}"
         for v in variant_list:
             tm_all = results[v].get('timing_metrics', {})
-            total_correct   = sum(tm_all[sk].get('fdiag_correct',   0) for sk in tm_all)
-            total_diagnosed = sum(tm_all[sk].get('fdiag_diagnosed', 0) for sk in tm_all)
-            if total_diagnosed > 0:
-                cell = f"{total_correct}/{total_diagnosed} ({total_correct/total_diagnosed:.0%})"
+            total_correct = sum(tm_all[sk].get('fdiag_correct', 0) for sk in tm_all)
+            total_total   = sum(tm_all[sk].get('fdiag_total',   0) for sk in tm_all)
+            if total_total > 0:
+                cell = f"{total_correct}/{total_total} ({total_correct/total_total:.0%})"
             else:
                 cell = "N/A"
             row += f"{cell:<{col_w}s}"
@@ -639,10 +637,10 @@ def save_alarm_metrics(results: dict, results_dir: Path):
         row = f"  {'Overall*':<8s}"
         for v in variant_list:
             tm_all = results[v].get('timing_metrics', {})
-            total_correct   = sum(tm_all[sk].get('fdiag_correct',   0) for sk in tm_all if int(sk) != 15)
-            total_diagnosed = sum(tm_all[sk].get('fdiag_diagnosed', 0) for sk in tm_all if int(sk) != 15)
-            if total_diagnosed > 0:
-                cell = f"{total_correct}/{total_diagnosed} ({total_correct/total_diagnosed:.0%})"
+            total_correct = sum(tm_all[sk].get('fdiag_correct', 0) for sk in tm_all if int(sk) != 15)
+            total_total   = sum(tm_all[sk].get('fdiag_total',   0) for sk in tm_all if int(sk) != 15)
+            if total_total > 0:
+                cell = f"{total_correct}/{total_total} ({total_correct/total_total:.0%})"
             else:
                 cell = "N/A"
             row += f"{cell:<{col_w}s}"

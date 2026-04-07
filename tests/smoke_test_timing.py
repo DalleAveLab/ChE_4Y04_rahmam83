@@ -6,7 +6,7 @@
 
 # ── USER CONFIG ──────────────────────────────────────────
 MODEL       = 'wavelet_kan'       # efficient_kan | fourier_kan | wavelet_kan | fast_kan | mlp | cnn | rnn | lstm
-FAULT_K     = 1                   # IDV number (1–28, excluding 6)
+FAULT_K     = 16                   # IDV number (1–28, excluding 6)
 CONFIG_PATH = 'configs/config.yaml'
 # ─────────────────────────────────────────────────────────
 
@@ -28,21 +28,22 @@ DETECTION_THRESHOLD  = 0.10   # P(NOC) < this  → detected
 DIAGNOSIS_CONFIDENCE = 0.90   # max P(non-NOC) > this → diagnosed
 
 
-def compute_trial_timing(p_noc, p_all, x):
+def compute_trial_timing(p_noc, p_all, x, fault_k):
     """
     Given arrays for a single run (already post-fault-start filtered and sorted):
-      p_noc : (n_post_windows,)
-      p_all : (n_post_windows, n_classes)
-      x     : end_idx values (n_post_windows,)
+      p_noc   : (n_post_windows,)
+      p_all   : (n_post_windows, n_classes)
+      x       : end_idx values (n_post_windows,)
+      fault_k : true fault class index
     Returns (fdet_time, fdiag_time) — both relative to FAULT_START, or None if not triggered.
     """
     # FDetT
     det = np.where(p_noc < DETECTION_THRESHOLD)[0]
     fdet_time = int(x[det[0]]) - FAULT_START if len(det) else None
 
-    # FDiagT
-    max_fault_prob = p_all[:, 1:].max(axis=1)
-    diag = np.where(max_fault_prob > DIAGNOSIS_CONFIDENCE)[0]
+    # FDiagT: first window where the TRUE fault class exceeds confidence
+    correct_class_prob = p_all[:, fault_k]
+    diag = np.where(correct_class_prob > DIAGNOSIS_CONFIDENCE)[0]
     fdiag_time = int(x[diag[0]]) - FAULT_START if len(diag) else None
 
     return fdet_time, fdiag_time
@@ -133,7 +134,7 @@ def main():
         # Post-fault slice (same as evaluate.py:119-122)
         post        = x_full >= FAULT_START
         fdet_time, fdiag_time = compute_trial_timing(
-            p_noc_all[post], p_all_full[post], x_full[post]
+            p_noc_all[post], p_all_full[post], x_full[post], FAULT_K
         )
 
         records.append((run_id, fdet_time, fdiag_time))
