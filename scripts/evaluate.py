@@ -18,6 +18,9 @@ from sklearn.metrics import (
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from configs.config_loader import load_config
 
@@ -330,328 +333,424 @@ def format_params_short(params: dict) -> str:
     return ', '.join(parts)
 
 
-def save_alarm_metrics(results: dict, results_dir: Path):
-    """Write model comparison and alarm analysis to model_scores_and_alarm_metrics.txt."""
-    if not results:
+def _xl_header_style(ws, row, col, value, bold=True, bg_color=None, center=True):
+    """Write a styled header cell."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    cell = ws.cell(row=row, column=col, value=value)
+    cell.font = Font(bold=bold)
+    if bg_color:
+        cell.fill = PatternFill('solid', fgColor=bg_color)
+    if center:
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    return cell
+
+
+def _xl_val(ws, row, col, value, fmt=None, center=False):
+    """Write a plain value cell, optionally with number format."""
+    from openpyxl.styles import Alignment
+    cell = ws.cell(row=row, column=col, value=value)
+    if fmt:
+        cell.number_format = fmt
+    if center:
+        cell.alignment = Alignment(horizontal='center')
+    return cell
+
+
+def _xl_autowidth(ws, min_width=8, max_width=30):
+    """Auto-size column widths based on content."""
+    from openpyxl.utils import get_column_letter
+    for col in ws.columns:
+        width = min_width
+        for cell in col:
+            if cell.value is not None:
+                width = max(width, min(max_width, len(str(cell.value)) + 2))
+        ws.column_dimensions[get_column_letter(col[0].column)].width = width
+
+
+# Pastel header fill colours (one per model, cycling)
+_MODEL_COLORS = [
+    'BDD7EE',  # light blue
+    'E2EFDA',  # light green
+    'FCE4D6',  # light orange
+    'FFF2CC',  # light yellow
+    'DDEBF7',  # lighter blue
+    'F4CCCC',  # light red
+    'D9D2E9',  # light purple
+    'D0E4F5',  # sky blue
+]
+
+DISPLAY_NAMES = {
+    'efficient_kan': 'EfficientKAN',
+    'fourier_kan':   'FourierKAN',
+    'wavelet_kan':   'WavKAN',
+    'fast_kan':      'FastKAN',
+    'mlp':           'MLP',
+    'cnn':           'CNN',
+    'rnn':           'RNN',
+    'lstm':          'LSTM',
+}
+
+
+def _sheet_model_comparison(wb, results):
+    """Sheet 1: overall model comparison metrics."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws = wb.create_sheet('Model Comparison')
+    headers = [
+        'Model', 'Accuracy', 'Macro F1', 'Val Accuracy', 'Val-Test Gap',
+        'Conf (Correct)', 'Conf (Wrong)', 'Epochs', 'Train Time (s)', 'Best Params',
+    ]
+    for col, h in enumerate(headers, 1):
+        _xl_header_style(ws, 1, col, h, bg_color='4472C4')
+        ws.cell(row=1, column=col).font = Font(bold=True, color='FFFFFF')
+
+    best_acc = max((m['accuracy'] for m in results.values()), default=0)
+    for r, (variant, m) in enumerate(results.items(), 2):
+        acc     = m['accuracy']
+        val_acc = m.get('val_accuracy')
+        cc      = m.get('mean_conf_correct')
+        cw      = m.get('mean_conf_wrong')
+        ep      = m.get('epochs_trained')
+        t       = m.get('training_time_s')
+        ws.cell(row=r, column=1, value=DISPLAY_NAMES.get(variant, variant))
+        ws.cell(row=r, column=2, value=round(acc, 4))
+        ws.cell(row=r, column=3, value=round(m['macro_f1'], 4))
+        ws.cell(row=r, column=4, value=round(val_acc, 4) if val_acc is not None else None)
+        ws.cell(row=r, column=5, value=round(val_acc - acc, 4) if val_acc is not None else None)
+        ws.cell(row=r, column=6, value=round(cc, 4) if cc is not None else None)
+        ws.cell(row=r, column=7, value=round(cw, 4) if cw is not None else None)
+        ws.cell(row=r, column=8, value=ep)
+        ws.cell(row=r, column=9, value=round(t, 1) if t is not None else None)
+        ws.cell(row=r, column=10, value=format_params_short(m.get('best_params', {})))
+        if abs(acc - best_acc) < 1e-9:
+            for col in range(1, 11):
+                ws.cell(row=r, column=col).fill = PatternFill('solid', fgColor='E2EFDA')
+    _xl_autowidth(ws)
+
+
+def _sheet_per_class_f1(wb, results):
+    """Sheet 2: per-class F1 for all models."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    ws = wb.create_sheet('Per-Class F1')
+    all_classes = sorted(set(
+        c for m in results.values() for c in m.get('per_class_f1', {})
+    ))
+    if not all_classes:
         return
 
-    lines = []
+    # Row 1: model group headers (merged across fault columns)
+    # Row 2: sub-headers (Fault | F1 per model)
+    ws.cell(row=1, column=1, value='Fault')
+    ws.cell(row=1, column=1).font = Font(bold=True)
 
-    lines.append("=" * 120)
-    lines.append("  Model Comparison  (KAN Evaluation — TEP Fault Detection)")
-    lines.append("=" * 120)
-    lines.append(
-        f"\n  {'Model':<18s} {'Accuracy':>10s} {'Macro F1':>10s} "
-        f"{'Val Acc':>10s} {'Gap':>8s} {'Conf(Correct)':>14s} {'Conf(Wrong)':>12s} "
-        f"{'Epochs':>8s} {'Train Time':>12s} {'Best Params'}"
-    )
-    lines.append(f"  {'-'*18} {'-'*10} {'-'*10} {'-'*10} {'-'*8} {'-'*14} {'-'*12} {'-'*8} {'-'*12} {'-'*55}")
+    col = 2
+    for idx, (variant, _) in enumerate(results.items()):
+        color = _MODEL_COLORS[idx % len(_MODEL_COLORS)]
+        cell = ws.cell(row=1, column=col, value=DISPLAY_NAMES.get(variant, variant))
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill('solid', fgColor=color)
+        cell.alignment = Alignment(horizontal='center')
+        col += 1
 
-    best_model = None
-    best_acc = -1.0
-    for variant, m in results.items():
-        acc = m['accuracy']
-        f1 = m['macro_f1']
-        val_acc = m.get('val_accuracy')
-        params_str = format_params_short(m.get('best_params', {}))
-        if val_acc is not None:
-            gap_str = f"{val_acc - acc:+.4f}"
-            val_str = f"{val_acc:.4f}"
-        else:
-            gap_str = "N/A"
-            val_str = "N/A"
-        cc = m.get('mean_conf_correct')
-        cw = m.get('mean_conf_wrong')
-        cc_str = f"{cc:.4f}" if cc is not None else "N/A"
-        cw_str = f"{cw:.4f}" if cw is not None else "N/A"
-        ep = m.get('epochs_trained')
-        t  = m.get('training_time_s')
-        ep_str = str(ep) if ep is not None else "N/A"
-        t_str  = f"{t:.1f}s" if t is not None else "N/A"
-        lines.append(
-            f"  {variant:<18s} {acc:>10.4f} {f1:>10.4f} "
-            f"{val_str:>10s} {gap_str:>8s} {cc_str:>14s} {cw_str:>12s} "
-            f"{ep_str:>8s} {t_str:>12s} {params_str}"
-        )
-        if acc > best_acc:
-            best_acc = acc
-            best_model = variant
+    # Row 2: class labels
+    ws.cell(row=2, column=1, value='Class')
+    ws.cell(row=2, column=1).font = Font(bold=True)
+    for idx, (variant, _) in enumerate(results.items()):
+        color = _MODEL_COLORS[idx % len(_MODEL_COLORS)]
+        cell = ws.cell(row=2, column=2 + idx, value='F1')
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill('solid', fgColor=color)
+        cell.alignment = Alignment(horizontal='center')
 
-    lines.append(f"\n  Best model: {best_model} (accuracy = {best_acc:.4f})")
+    # Data rows
+    variants = list(results.keys())
+    for r, c in enumerate(all_classes, 3):
+        ws.cell(row=r, column=1, value=f'IDV{c}' if c != 0 else 'NOC')
+        for idx, variant in enumerate(variants):
+            val = results[variant].get('per_class_f1', {}).get(c)
+            cell = ws.cell(row=r, column=2 + idx, value=round(val, 4) if val is not None else None)
+            cell.alignment = Alignment(horizontal='center')
+            if val is not None and val < 0.85:
+                cell.fill = PatternFill('solid', fgColor='FCE4D6')
 
-    # Per-Class F1
-    all_classes = set()
-    for m in results.values():
-        all_classes.update(m.get('per_class_f1', {}).keys())
-    all_classes = sorted(all_classes)
+    _xl_autowidth(ws)
 
-    if all_classes:
-        class_labels = [f"C{c}" for c in all_classes]
-        lines.append(f"\n{'=' * 120}")
-        lines.append("  Per-Class F1 Comparison")
-        lines.append("=" * 120)
-        lines.append(f"\n  {'Model':<18s} " + " ".join(f"{cl:>6s}" for cl in class_labels))
-        lines.append(f"  {'-'*18} " + " ".join("-" * 6 for _ in class_labels))
-        for variant, m in results.items():
-            pf1 = m.get('per_class_f1', {})
-            row = f"  {variant:<18s} " + " ".join(f"{pf1.get(c, 0.0):>6.3f}" for c in all_classes)
-            lines.append(row)
-        lines.append(f"  {'-'*18} " + " ".join("-" * 6 for _ in class_labels))
-        abbrev = {'efficient_kan': 'EFF', 'fourier_kan': 'FOU',
-                  'wavelet_kan': 'WAV', 'fast_kan': 'FST'}
-        best_row = f"  {'Best model':<18s} "
-        for c in all_classes:
-            scores = {v: m.get('per_class_f1', {}).get(c, 0.0) for v, m in results.items()}
-            best_v = max(scores, key=scores.get)
-            best_row += f"{abbrev.get(best_v, best_v[:3]):>6s} "
-        lines.append(best_row)
-        lines.append(f"\n  Weakest classes per model (F1 < 0.85):")
-        for variant, m in results.items():
-            pf1 = m.get('per_class_f1', {})
-            weak = sorted(((c, f) for c, f in pf1.items() if f < 0.85), key=lambda x: x[1])
-            if weak:
-                lines.append(f"    {variant:<18s}: " + ", ".join(f"C{c}={f:.3f}" for c, f in weak))
-            else:
-                lines.append(f"    {variant:<18s}: None (all classes >= 0.85)")
 
-    has_alarm_data = any(
+def _sheet_alarm_analysis(wb, results):
+    """Sheet 3: alarm/detection rate analysis."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    has_alarm = any(
         m.get('false_alarm_rate') is not None or m.get('detection_rate') is not None
         for m in results.values()
     )
-    if not has_alarm_data:
-        out_path = results_dir / 'model_scores_and_alarm_metrics.txt'
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(lines) + "\n")
-        print(f"\n  Saved: {out_path}")
+    if not has_alarm:
         return
 
+    ws = wb.create_sheet('Alarm Analysis')
     threshold = next(
-        (m['alarm_threshold'] for m in results.values() if 'alarm_threshold' in m),
-        0.90
+        (m['alarm_threshold'] for m in results.values() if 'alarm_threshold' in m), 0.90
     )
 
-    lines.append(f"\n{'=' * 120}")
-    lines.append(f"  Alarm Analysis  (threshold: fault_prob = 1 - P(class 0) > {threshold:.0%})")
-    lines.append("=" * 120)
-    lines.append(
-        f"\n  {'Model':<18s} {'False Alarm Rate':>18s} {'Correct Normal Rate':>20s} "
-        f"{'Detection Rate':>16s} {'Miss Rate':>12s} "
-        f"{'Mean Top-2 Margin':>20s} {'Ambiguous (<10pp)':>18s}"
-    )
-    lines.append(
-        f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}"
-    )
-    lines.append(
-        f"  {'':18s} {'(healthy → alarm)':>18s} {'(healthy → no alarm)':>20s} "
-        f"{'(fault → alarm)':>16s} {'(fault → no alarm)':>12s} "
-        f"{'(top1 - top2 prob)':>20s} {'(% windows)':>18s}"
-    )
-    lines.append(
-        f"  {'-'*18} {'-'*18} {'-'*20} {'-'*16} {'-'*12} {'-'*20} {'-'*18}"
-    )
+    headers = [
+        'Model',
+        f'False Alarm Rate\n(healthy→alarm)',
+        f'Correct Normal Rate\n(healthy→no alarm)',
+        f'Detection Rate\n(fault→alarm)',
+        f'Miss Rate\n(fault→no alarm)',
+        'Mean Top-2 Margin',
+        'Ambiguous (<10pp)',
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = _xl_header_style(ws, 1, col, h, bg_color='4472C4')
+        cell.font = Font(bold=True, color='FFFFFF')
 
-    sanity_far = sanity_dr = None
-    for variant, m in results.items():
+    ws.row_dimensions[1].height = 30
+
+    for r, (variant, m) in enumerate(results.items(), 2):
         far    = m.get('false_alarm_rate')
         cnr    = m.get('correct_normal_rate')
         dr     = m.get('detection_rate')
         mr     = m.get('miss_rate')
         margin = m.get('mean_top2_margin')
         ambig  = m.get('frac_ambiguous')
-        far_str    = f"{far:.4f} ({far*100:.1f}%)"        if far    is not None else "N/A"
-        cnr_str    = f"{cnr:.4f} ({cnr*100:.1f}%)"        if cnr    is not None else "N/A"
-        dr_str     = f"{dr:.4f} ({dr*100:.1f}%)"          if dr     is not None else "N/A"
-        mr_str     = f"{mr:.4f} ({mr*100:.1f}%)"          if mr     is not None else "N/A"
-        margin_str = f"{margin:.4f} ({margin*100:.1f}pp)"  if margin is not None else "N/A"
-        ambig_str  = f"{ambig*100:.1f}%"                   if ambig  is not None else "N/A"
-        lines.append(
-            f"  {variant:<18s} {far_str:>18s} {cnr_str:>20s} "
-            f"{dr_str:>16s} {mr_str:>12s} "
-            f"{margin_str:>20s} {ambig_str:>18s}"
-        )
-        if sanity_far is None and far is not None and cnr is not None:
-            sanity_far = far + cnr
-        if sanity_dr is None and dr is not None and mr is not None:
-            sanity_dr = dr + mr
+        ws.cell(row=r, column=1, value=DISPLAY_NAMES.get(variant, variant))
+        for col, val in enumerate([far, cnr, dr, mr, margin, ambig], 2):
+            cell = ws.cell(row=r, column=col, value=round(val, 4) if val is not None else None)
+            cell.alignment = Alignment(horizontal='center')
+            cell.number_format = '0.0000'
 
-    if sanity_far is not None and sanity_dr is not None:
-        lines.append(
-            f"\n  Sanity check — FAR + CNR = {sanity_far:.6f}  |  FDR + MR = {sanity_dr:.6f}"
-            f"  (both should equal 1.000000)"
-        )
+    _xl_autowidth(ws)
 
-    # Per-class FDR table
-    all_fault_classes = set()
-    for m in results.values():
-        all_fault_classes.update(m.get('per_class_detection_rate', {}).keys())
-    all_fault_classes = sorted(all_fault_classes)
 
-    if all_fault_classes:
-        lines.append(f"\n  Per-Class Detection Rate  (fault → alarm, threshold {threshold:.0%})")
-        class_labels = [f"IDV{c}" for c in all_fault_classes]
-        lines.append(f"\n  {'Model':<18s} " + " ".join(f"{cl:>7s}" for cl in class_labels))
-        lines.append(f"  {'-'*18} " + " ".join("-" * 7 for _ in class_labels))
-        for variant, m in results.items():
-            pcdr = m.get('per_class_detection_rate', {})
-            row = f"  {variant:<18s} "
-            row += " ".join(
-                f"{pcdr[c]:>7.3f}" if pcdr.get(c) is not None else f"{'N/A':>7s}"
-                for c in all_fault_classes
-            )
-            lines.append(row)
+def _sheet_per_class_fdr(wb, results):
+    """Sheet 4: per-fault-class detection rate."""
+    from openpyxl.styles import Font, PatternFill, Alignment
+    all_fault_classes = sorted(set(
+        c for m in results.values() for c in m.get('per_class_detection_rate', {})
+    ))
+    if not all_fault_classes:
+        return
 
-        lines.append(f"\n  Weakest fault classes per model (FDR < 0.85):")
-        for variant, m in results.items():
-            pcdr = m.get('per_class_detection_rate', {})
-            weak = {c: v for c, v in pcdr.items() if v is not None and v < 0.85}
-            if weak:
-                weak_sorted = sorted(weak.items(), key=lambda x: x[1])
-                weak_str = ", ".join(f"IDV{c}={v:.3f}" for c, v in weak_sorted)
-                lines.append(f"    {variant:<18s}: {weak_str}")
-            else:
-                lines.append(f"    {variant:<18s}: None (all fault classes >= 0.85)")
+    ws = wb.create_sheet('Per-Class Detection Rate')
 
-    # ── Fault Timing Metrics ──────────────────────────────────────────────────
+    ws.cell(row=1, column=1, value='Fault')
+    ws.cell(row=1, column=1).font = Font(bold=True)
+    for idx, (variant, _) in enumerate(results.items()):
+        color = _MODEL_COLORS[idx % len(_MODEL_COLORS)]
+        cell = ws.cell(row=1, column=2 + idx, value=DISPLAY_NAMES.get(variant, variant))
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill('solid', fgColor=color)
+        cell.alignment = Alignment(horizontal='center')
+
+    variants = list(results.keys())
+    for r, c in enumerate(all_fault_classes, 2):
+        ws.cell(row=r, column=1, value=f'IDV{c}')
+        for idx, variant in enumerate(variants):
+            val = results[variant].get('per_class_detection_rate', {}).get(c)
+            cell = ws.cell(row=r, column=2 + idx, value=round(val, 4) if val is not None else None)
+            cell.alignment = Alignment(horizontal='center')
+            if val is not None and val < 0.85:
+                cell.fill = PatternFill('solid', fgColor='FCE4D6')
+
+    _xl_autowidth(ws)
+
+
+def _sheet_fault_detection_time(wb, results):
+    """Sheet 5: fault detection time table.
+    Layout: Fault | [Model: Mean, Std, Trials] x n_models
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment
     has_timing = any(m.get('timing_metrics') for m in results.values())
-    if has_timing:
-        # Collect all fault classes across models
-        all_timing_classes = set()
-        for m in results.values():
-            all_timing_classes.update(int(k) for k in m.get('timing_metrics', {}))
-        all_timing_classes = sorted(all_timing_classes)
+    if not has_timing:
+        return
 
-        variant_list = [v for v in results if results[v].get('timing_metrics')]
+    all_timing_classes = sorted(set(
+        int(k) for m in results.values() for k in m.get('timing_metrics', {})
+    ))
+    variant_list = [v for v in results if results[v].get('timing_metrics')]
+    if not variant_list:
+        return
 
-        for metric_key, metric_label, detected_key, total_key in [
-            ('fdet_mean',  'Fault Detection Time (FDetT)',       'fdet_detected',   'fdet_total'),
-            ('fdiag_mean', 'Fault Diagnosis Time (FDiagT)',      'fdiag_diagnosed', 'fdiag_total'),
-        ]:
-            std_key = metric_key.replace('_mean', '_std')
+    ws = wb.create_sheet('Fault Detection Time')
 
-            lines.append(f"\n{'=' * 120}")
-            lines.append(f"  {metric_label}")
-            if metric_key == 'fdet_mean':
-                lines.append("  FDetT  = first timestep (after fault insertion) where P(NOC) < 10%")
-            else:
-                lines.append("  FDiagT = first timestep (after fault insertion) where P(true fault class) > 90%")
-            lines.append("  Values are timesteps relative to fault insertion (t=600). "
-                         "Runs where criterion never triggers are excluded from mean/std.")
-            lines.append("=" * 120)
+    # Row 1: model group headers (3 cols each: Mean, Std, Trials)
+    ws.cell(row=1, column=1, value='Fault')
+    ws.cell(row=1, column=1).font = Font(bold=True)
 
-            col_w = 22
-            header = f"  {'Fault':<8s}" + "".join(f"{v:<{col_w}s}" for v in variant_list)
-            lines.append(f"\n{header}")
-            lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
+    col = 2
+    for idx, variant in enumerate(variant_list):
+        color = _MODEL_COLORS[idx % len(_MODEL_COLORS)]
+        cell = ws.cell(row=1, column=col, value=DISPLAY_NAMES.get(variant, variant))
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill('solid', fgColor=color)
+        cell.alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 2)
+        for sub_col, sub_h in enumerate(['Mean', 'Std', 'Trials'], col):
+            c2 = ws.cell(row=2, column=sub_col, value=sub_h)
+            c2.font = Font(bold=True)
+            c2.fill = PatternFill('solid', fgColor=color)
+            c2.alignment = Alignment(horizontal='center')
+        col += 3
 
-            for k in all_timing_classes:
-                sk = str(k)
-                row = f"  IDV{k:<4d}"
-                for v in variant_list:
-                    tm = results[v].get('timing_metrics', {}).get(sk, {})
-                    mean = tm.get(metric_key)
-                    std  = tm.get(std_key)
-                    n    = tm.get(detected_key, 0)
-                    tot  = tm.get(total_key, 0)
-                    if mean is not None:
-                        cell = f"{mean:.1f}±{std:.1f} ({n}/{tot})"
-                    else:
-                        cell = f"N/A (0/{tot})"
-                    row += f"{cell:<{col_w}s}"
-                lines.append(row)
+    ws.cell(row=2, column=1, value='Fault')
+    ws.cell(row=2, column=1).font = Font(bold=True)
 
-            # Overall: pool all individual run times across all fault classes
-            times_key = metric_key.replace('_mean', '_times')
-            lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
-            row = f"  {'Overall':<8s}"
-            for v in variant_list:
-                tm_all = results[v].get('timing_metrics', {})
-                all_times = []
-                for sk in tm_all:
-                    all_times.extend(tm_all[sk].get(times_key, []))
-                if all_times:
-                    cell = f"{np.mean(all_times):.1f}±{np.std(all_times):.1f}"
-                else:
-                    cell = "N/A"
-                row += f"{cell:<{col_w}s}"
-            lines.append(row)
+    # Data rows
+    for r, k in enumerate(all_timing_classes, 3):
+        sk = str(k)
+        ws.cell(row=r, column=1, value=f'IDV{k}')
+        col = 2
+        for variant in variant_list:
+            tm = results[variant].get('timing_metrics', {}).get(sk, {})
+            mean = tm.get('fdet_mean')
+            std  = tm.get('fdet_std')
+            n    = tm.get('fdet_detected', 0)
+            tot  = tm.get('fdet_total', 0)
+            ws.cell(row=r, column=col,     value=round(mean, 1) if mean is not None else None)
+            ws.cell(row=r, column=col + 1, value=round(std, 1)  if std  is not None else None)
+            ws.cell(row=r, column=col + 2, value=f'{n}/{tot}')
+            for c2 in range(col, col + 3):
+                ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
+            col += 3
 
-            # Overall excl. IDV15
-            row = f"  {'Overall*':<8s}"
-            for v in variant_list:
-                tm_all = results[v].get('timing_metrics', {})
-                all_times = []
-                for sk in tm_all:
-                    if int(sk) == 15:
-                        continue
-                    all_times.extend(tm_all[sk].get(times_key, []))
-                if all_times:
-                    cell = f"{np.mean(all_times):.1f}±{np.std(all_times):.1f}"
-                else:
-                    cell = "N/A"
-                row += f"{cell:<{col_w}s}"
-            lines.append(row)
-            lines.append("  * excludes IDV15")
+    # Overall rows
+    for row_label, skip15 in [('Overall', False), ('Overall*', True)]:
+        r += 1
+        ws.cell(row=r, column=1, value=row_label).font = Font(bold=True)
+        col = 2
+        for variant in variant_list:
+            tm_all = results[variant].get('timing_metrics', {})
+            all_times = []
+            n_det = n_tot = 0
+            for sk, tm in tm_all.items():
+                if skip15 and int(sk) == 15:
+                    continue
+                all_times.extend(tm.get('fdet_times', []))
+                n_det += tm.get('fdet_detected', 0)
+                n_tot += tm.get('fdet_total', 0)
+            ws.cell(row=r, column=col,     value=round(float(np.mean(all_times)), 1) if all_times else None)
+            ws.cell(row=r, column=col + 1, value=round(float(np.std(all_times)), 1)  if all_times else None)
+            ws.cell(row=r, column=col + 2, value=f'{n_det}/{n_tot}')
+            for c2 in range(col, col + 3):
+                ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
+            col += 3
 
-        # Diagnosis accuracy table
-        lines.append(f"\n{'=' * 120}")
-        lines.append("  Fault Diagnosis Accuracy")
-        lines.append("  Fraction of ALL runs where P(true fault class) first exceeded the diagnosis threshold.")
-        lines.append("  Format: correctly_diagnosed/total (accuracy%)")
-        lines.append("=" * 120)
+    note_row = r + 1
+    ws.cell(row=note_row, column=1, value='* excludes IDV15').font = Font(italic=True)
+    _xl_autowidth(ws)
 
-        col_w = 22
-        header = f"  {'Fault':<8s}" + "".join(f"{v:<{col_w}s}" for v in variant_list)
-        lines.append(f"\n{header}")
-        lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
 
-        for k in all_timing_classes:
-            sk = str(k)
-            row = f"  IDV{k:<4d}"
-            for v in variant_list:
-                tm = results[v].get('timing_metrics', {}).get(sk, {})
-                correct = tm.get('fdiag_correct', 0)
-                total   = tm.get('fdiag_total', 0)
-                acc     = tm.get('fdiag_accuracy')
-                if total > 0 and acc is not None:
-                    cell = f"{correct}/{total} ({acc:.0%})"
-                else:
-                    cell = f"N/A"
-                row += f"{cell:<{col_w}s}"
-            lines.append(row)
+def _sheet_fault_diagnosis_time(wb, results):
+    """Sheet 6: fault diagnosis time table.
+    Layout: Fault | [Model: Mean, Std, Trials, Correct Diagnosis (%)] x n_models
+    """
+    from openpyxl.styles import Font, PatternFill, Alignment
+    has_timing = any(m.get('timing_metrics') for m in results.values())
+    if not has_timing:
+        return
 
-        # Overall accuracy across all fault classes
-        lines.append(f"  {'-'*8}" + "".join("-" * col_w for _ in variant_list))
-        row = f"  {'Overall':<8s}"
-        for v in variant_list:
-            tm_all = results[v].get('timing_metrics', {})
-            total_correct = sum(tm_all[sk].get('fdiag_correct', 0) for sk in tm_all)
-            total_total   = sum(tm_all[sk].get('fdiag_total',   0) for sk in tm_all)
-            if total_total > 0:
-                cell = f"{total_correct}/{total_total} ({total_correct/total_total:.0%})"
-            else:
-                cell = "N/A"
-            row += f"{cell:<{col_w}s}"
-        lines.append(row)
+    all_timing_classes = sorted(set(
+        int(k) for m in results.values() for k in m.get('timing_metrics', {})
+    ))
+    variant_list = [v for v in results if results[v].get('timing_metrics')]
+    if not variant_list:
+        return
 
-        # Overall accuracy excluding IDV15
-        row = f"  {'Overall*':<8s}"
-        for v in variant_list:
-            tm_all = results[v].get('timing_metrics', {})
-            total_correct = sum(tm_all[sk].get('fdiag_correct', 0) for sk in tm_all if int(sk) != 15)
-            total_total   = sum(tm_all[sk].get('fdiag_total',   0) for sk in tm_all if int(sk) != 15)
-            if total_total > 0:
-                cell = f"{total_correct}/{total_total} ({total_correct/total_total:.0%})"
-            else:
-                cell = "N/A"
-            row += f"{cell:<{col_w}s}"
-        lines.append(row)
-        lines.append("  * excludes IDV15")
+    ws = wb.create_sheet('Fault Diagnosis Time')
 
-    lines.append("=" * 120)
+    # Row 1: model group headers (4 cols each)
+    ws.cell(row=1, column=1, value='Fault')
+    ws.cell(row=1, column=1).font = Font(bold=True)
 
-    out_path = results_dir / 'model_scores_and_alarm_metrics.txt'
-    with open(out_path, 'w', encoding='utf-8') as f:
-        f.write("\n".join(lines) + "\n")
+    col = 2
+    for idx, variant in enumerate(variant_list):
+        color = _MODEL_COLORS[idx % len(_MODEL_COLORS)]
+        cell = ws.cell(row=1, column=col, value=DISPLAY_NAMES.get(variant, variant))
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill('solid', fgColor=color)
+        cell.alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 3)
+        sub_headers = ['Mean', 'Std', 'Trials', 'Correct\nDiagnosis (%)']
+        for offset, sub_h in enumerate(sub_headers):
+            c2 = ws.cell(row=2, column=col + offset, value=sub_h)
+            c2.font = Font(bold=True)
+            c2.fill = PatternFill('solid', fgColor=color)
+            c2.alignment = Alignment(horizontal='center', wrap_text=True)
+        col += 4
+
+    ws.cell(row=2, column=1, value='Fault')
+    ws.cell(row=2, column=1).font = Font(bold=True)
+    ws.row_dimensions[2].height = 28
+
+    # Data rows
+    r = 2
+    for k in all_timing_classes:
+        r += 1
+        sk = str(k)
+        ws.cell(row=r, column=1, value=f'IDV{k}')
+        col = 2
+        for variant in variant_list:
+            tm = results[variant].get('timing_metrics', {}).get(sk, {})
+            mean    = tm.get('fdiag_mean')
+            std     = tm.get('fdiag_std')
+            n_diag  = tm.get('fdiag_diagnosed', 0)
+            n_tot   = tm.get('fdiag_total', 0)
+            correct = tm.get('fdiag_correct', 0)
+            acc     = tm.get('fdiag_accuracy')
+            ws.cell(row=r, column=col,     value=round(mean, 1) if mean is not None else None)
+            ws.cell(row=r, column=col + 1, value=round(std, 1)  if std  is not None else None)
+            ws.cell(row=r, column=col + 2, value=f'{n_diag}/{n_tot}')
+            ws.cell(row=r, column=col + 3, value=round(acc * 100, 1) if acc is not None else None)
+            for c2 in range(col, col + 4):
+                ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
+            col += 4
+
+    # Overall rows
+    for row_label, skip15 in [('Overall', False), ('Overall*', True)]:
+        r += 1
+        ws.cell(row=r, column=1, value=row_label).font = Font(bold=True)
+        col = 2
+        for variant in variant_list:
+            tm_all = results[variant].get('timing_metrics', {})
+            all_times, n_diag, n_tot, n_correct = [], 0, 0, 0
+            for sk, tm in tm_all.items():
+                if skip15 and int(sk) == 15:
+                    continue
+                all_times.extend(tm.get('fdiag_times', []))
+                n_diag   += tm.get('fdiag_diagnosed', 0)
+                n_tot    += tm.get('fdiag_total', 0)
+                n_correct += tm.get('fdiag_correct', 0)
+            ws.cell(row=r, column=col,     value=round(float(np.mean(all_times)), 1) if all_times else None)
+            ws.cell(row=r, column=col + 1, value=round(float(np.std(all_times)), 1)  if all_times else None)
+            ws.cell(row=r, column=col + 2, value=f'{n_diag}/{n_tot}')
+            ws.cell(row=r, column=col + 3, value=round(n_correct / n_tot * 100, 1) if n_tot else None)
+            for c2 in range(col, col + 4):
+                ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
+            col += 4
+
+    note_row = r + 1
+    ws.cell(row=note_row, column=1, value='* excludes IDV15').font = Font(italic=True)
+    _xl_autowidth(ws)
+
+
+def save_alarm_metrics(results: dict, results_dir: Path):
+    """Write evaluation results to a multi-sheet Excel workbook."""
+    if not results:
+        return
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    # Remove default sheet
+    wb.remove(wb.active)
+
+    _sheet_model_comparison(wb, results)
+    _sheet_per_class_f1(wb, results)
+    _sheet_alarm_analysis(wb, results)
+    _sheet_per_class_fdr(wb, results)
+    _sheet_fault_detection_time(wb, results)
+    _sheet_fault_diagnosis_time(wb, results)
+
+    out_path = results_dir / 'model_evaluation.xlsx'
+    wb.save(out_path)
     print(f"\n  Saved: {out_path}")
 
 
