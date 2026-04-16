@@ -6,7 +6,9 @@
 
 # ── USER CONFIG ──────────────────────────────────────────
 MODEL       = 'wavelet_kan'       # efficient_kan | fourier_kan | wavelet_kan | fast_kan | mlp | cnn | rnn | lstm
-FAULT_K     = 16                   # IDV number (1–28, excluding 6)
+FAULT_K     = 14                  # IDV number (1–28, excluding 6)
+ZOOM_PRE    = 20                  # timesteps before fault insertion to show in zoom
+ZOOM_POST   = 40                  # timesteps after fault insertion to show in zoom
 CONFIG_PATH = 'configs/config.yaml'
 # ─────────────────────────────────────────────────────────
 
@@ -47,6 +49,60 @@ def compute_trial_timing(p_noc, p_all, x, fault_k):
     fdiag_time = int(x[diag[0]]) - FAULT_START if len(diag) else None
 
     return fdet_time, fdiag_time
+
+
+def plot_trial_zoom(run_id, x_full, p_all_full, fdet_time, fdiag_time, fault_k, model, out_path):
+    """Zoomed plot around fault insertion showing all relevant class probabilities."""
+    x_min = FAULT_START - ZOOM_PRE
+    x_max = FAULT_START + ZOOM_POST
+    zoom  = (x_full >= x_min) & (x_full <= x_max)
+    if not zoom.any():
+        return
+    x_zoom     = x_full[zoom]
+    probs_zoom = p_all_full[zoom]        # (n_zoom_windows, n_classes)
+    n_classes  = probs_zoom.shape[1]
+
+    # Find top other class (highest mean prob post-fault, excluding NOC and true fault)
+    post = x_zoom >= FAULT_START
+    if post.any():
+        exclude = {0, fault_k}
+        top_other = max(
+            (c for c in range(n_classes) if c not in exclude),
+            key=lambda c: probs_zoom[post, c].max()
+        )
+    else:
+        top_other = None
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    ax.plot(x_zoom, probs_zoom[:, 0],       color='steelblue',  linewidth=1.2, label='P(NOC)')
+    ax.plot(x_zoom, probs_zoom[:, fault_k], color='darkorange', linewidth=1.2, label=f'P(IDV{fault_k})')
+    if top_other is not None:
+        ax.plot(x_zoom, probs_zoom[:, top_other], color='crimson', linewidth=1.2,
+                linestyle='--', label=f'P(IDV{top_other}) [top other]')
+
+    ax.axvline(x=FAULT_START, color='red', linestyle='--', linewidth=1.2,
+               label=f'Fault inserted (t={FAULT_START})')
+    ax.axhline(y=0.90, color='gray', linestyle=':', linewidth=1.0, label='90% threshold')
+
+    if fdet_time is not None:
+        det_x = FAULT_START + fdet_time
+        ax.axvline(x=det_x, color='green', linestyle='--', linewidth=1.2, label=f'FDetT={fdet_time}')
+    if fdiag_time is not None:
+        diag_x = FAULT_START + fdiag_time
+        ax.axvline(x=diag_x, color='purple', linestyle='--', linewidth=1.2, label=f'FDiagT={fdiag_time}')
+
+    ax.set_xlim(x_zoom[0], x_zoom[-1])
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel('Timestep (end of window)', fontsize=10)
+    ax.set_ylabel('Softmax probability', fontsize=10)
+    ax.set_title(f'{model} — IDV{fault_k} — {run_id} [zoom t={x_zoom[0]}–{x_zoom[-1]}]', fontsize=11)
+    ax.legend(fontsize=8, loc='center right')
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 
 def plot_trial(run_id, x_full, p_noc_full, p_fault_full,
@@ -142,6 +198,11 @@ def main():
         out_path = out_dir / f'trial_{run_id}.png'
         plot_trial(run_id, x_full, p_noc_all, p_fault_all,
                    fdet_time, fdiag_time, FAULT_K, MODEL, out_path)
+
+        zoom_path = out_dir / f'trial_{run_id}_zoom.png'
+        plot_trial_zoom(run_id, x_full, p_all_full,
+                        fdet_time, fdiag_time, FAULT_K, MODEL, zoom_path)
+
         print(f"  [{i:2d}/{len(all_runs)}] {run_id}  FDetT={fdet_time}  FDiagT={fdiag_time}  -> {out_path.name}")
 
     # ── Summary statistics (same formula as evaluate.py:152-158) ──
