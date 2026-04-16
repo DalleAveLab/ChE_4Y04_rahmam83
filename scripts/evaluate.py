@@ -148,31 +148,40 @@ def compute_timing_metrics(
             first_diag_time    = int(x_f[any_diag[0]]) - fault_start
             first_diag_correct = bool(p_all_f[any_diag[0], fault_k] > diagnosis_confidence)
 
+        # Window-level diagnosis accuracy: across all committed windows, how many are correct
+        diagnosed_mask    = p_non_noc.max(axis=1) > diagnosis_confidence
+        n_diag_windows    = int(diagnosed_mask.sum())
+        predicted_classes = p_non_noc[diagnosed_mask].argmax(axis=1) + 1  # +1: p_non_noc col i → class i+1
+        n_correct_windows = int((predicted_classes == fault_k).sum())
+
         if fault_k not in per_class:
             per_class[fault_k] = {
                 'fdet': [], 'fdiag': [], 'fdiag_correct': [],
                 'first_diag': [], 'first_diag_correct': [],
+                'n_diag_windows': 0, 'n_correct_windows': 0,
             }
         per_class[fault_k]['fdet'].append(fdet_time)
         per_class[fault_k]['fdiag'].append(fdiag_time)
         per_class[fault_k]['fdiag_correct'].append(fdiag_correct if fdiag_time is not None else None)
         per_class[fault_k]['first_diag'].append(first_diag_time)
         per_class[fault_k]['first_diag_correct'].append(first_diag_correct if first_diag_time is not None else None)
+        per_class[fault_k]['n_diag_windows']   += n_diag_windows
+        per_class[fault_k]['n_correct_windows'] += n_correct_windows
 
     timing: dict[int, dict] = {}
     for k in sorted(per_class):
         fdet_all              = per_class[k]['fdet']
         fdiag_all             = per_class[k]['fdiag']
-        fdiag_correct_all     = per_class[k]['fdiag_correct']
         first_diag_all        = per_class[k]['first_diag']
         first_diag_correct_all = per_class[k]['first_diag_correct']
         fdet_vals        = [t for t in fdet_all       if t is not None]
         fdiag_vals       = [t for t in fdiag_all      if t is not None]
         first_diag_vals  = [t for t in first_diag_all if t is not None]
-        n_correct        = sum(1 for v in fdiag_correct_all      if v is True)
-        n_first_correct  = sum(1 for v in first_diag_correct_all if v is True)
-        n_diagnosed = len(fdiag_vals)
-        n_total     = len(fdiag_all)
+        n_first_correct   = sum(1 for v in first_diag_correct_all if v is True)
+        n_diagnosed       = len(fdiag_vals)
+        n_total           = len(fdiag_all)
+        n_diag_windows    = per_class[k]['n_diag_windows']
+        n_correct_windows = per_class[k]['n_correct_windows']
         timing[k] = {
             'fdet_mean':               float(np.mean(fdet_vals))       if fdet_vals       else None,
             'fdet_std':                float(np.std(fdet_vals))        if fdet_vals       else None,
@@ -184,8 +193,9 @@ def compute_timing_metrics(
             'fdiag_diagnosed':         n_diagnosed,
             'fdiag_total':             n_total,
             'fdiag_times':             fdiag_vals,
-            'fdiag_correct':           n_correct,
-            'fdiag_accuracy':          float(n_correct / n_total)      if n_total         else None,
+            'fdiag_accuracy':          float(n_correct_windows / n_diag_windows) if n_diag_windows else None,
+            'n_diag_windows':          n_diag_windows,
+            'n_correct_windows':       n_correct_windows,
             'first_diag_mean':         float(np.mean(first_diag_vals)) if first_diag_vals else None,
             'first_diag_std':          float(np.std(first_diag_vals))  if first_diag_vals else None,
             'first_diag_count':        len(first_diag_vals),
@@ -746,23 +756,25 @@ def _sheet_fault_diagnosis_time(wb, results):
         for variant in variant_list:
             tm_all = results[variant].get('timing_metrics', {})
             all_times, all_first_times = [], []
-            n_diag, n_tot, n_correct, n_first_correct = 0, 0, 0, 0
+            n_diag, n_tot, n_first_correct = 0, 0, 0
+            n_diag_windows, n_correct_windows = 0, 0
             for sk, tm in tm_all.items():
                 if skip15 and int(sk) == 15:
                     continue
                 all_times.extend(tm.get('fdiag_times', []))
                 all_first_times.extend(tm.get('first_diag_times', []))
-                n_diag          += tm.get('fdiag_diagnosed', 0)
-                n_tot           += tm.get('fdiag_total', 0)
-                n_correct       += tm.get('fdiag_correct', 0)
-                n_first_correct += tm.get('first_diag_correct', 0)
+                n_diag            += tm.get('fdiag_diagnosed', 0)
+                n_tot             += tm.get('fdiag_total', 0)
+                n_diag_windows    += tm.get('n_diag_windows', 0)
+                n_correct_windows += tm.get('n_correct_windows', 0)
+                n_first_correct   += tm.get('first_diag_correct', 0)
             ws.cell(row=r, column=col,     value=round(float(np.mean(all_times)), 1)       if all_times       else None)
             ws.cell(row=r, column=col + 1, value=round(float(np.std(all_times)), 1)        if all_times       else None)
             ws.cell(row=r, column=col + 2, value=round(float(np.mean(all_first_times)), 1) if all_first_times else None)
             ws.cell(row=r, column=col + 3, value=round(float(np.std(all_first_times)), 1)  if all_first_times else None)
             ws.cell(row=r, column=col + 4, value=f'{n_diag}/{n_tot}')
-            ws.cell(row=r, column=col + 5, value=round(n_correct / n_tot * 100, 1)       if n_tot else None)
-            ws.cell(row=r, column=col + 6, value=round(n_first_correct / n_tot * 100, 1) if n_tot else None)
+            ws.cell(row=r, column=col + 5, value=round(n_correct_windows / n_diag_windows * 100, 1) if n_diag_windows else None)
+            ws.cell(row=r, column=col + 6, value=round(n_first_correct / n_tot * 100, 1)            if n_tot          else None)
             for c2 in range(col, col + 7):
                 ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
             col += 7
