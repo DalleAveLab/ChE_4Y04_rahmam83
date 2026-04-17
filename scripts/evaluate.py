@@ -618,13 +618,13 @@ def _sheet_fault_detection_time(wb, results):
         cell.font = Font(bold=True)
         cell.fill = PatternFill('solid', fgColor=color)
         cell.alignment = Alignment(horizontal='center')
-        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 2)
-        for sub_col, sub_h in enumerate(['Mean', 'Std', 'Trials'], col):
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 1)
+        for sub_col, sub_h in enumerate(['Mean \u00b1 Std', 'Trials'], col):
             c2 = ws.cell(row=2, column=sub_col, value=sub_h)
             c2.font = Font(bold=True)
             c2.fill = PatternFill('solid', fgColor=color)
             c2.alignment = Alignment(horizontal='center')
-        col += 3
+        col += 2
 
     ws.cell(row=2, column=1, value='Fault')
     ws.cell(row=2, column=1).font = Font(bold=True)
@@ -640,12 +640,12 @@ def _sheet_fault_detection_time(wb, results):
             std  = tm.get('fdet_std')
             n    = tm.get('fdet_detected', 0)
             tot  = tm.get('fdet_total', 0)
-            ws.cell(row=r, column=col,     value=round(mean, 1) if mean is not None else None)
-            ws.cell(row=r, column=col + 1, value=round(std, 1)  if std  is not None else None)
-            ws.cell(row=r, column=col + 2, value=f'{n}/{tot}')
-            for c2 in range(col, col + 3):
+            mean_std = f'{mean:.1f} \u00b1 {std:.1f}' if mean is not None and std is not None else None
+            ws.cell(row=r, column=col,     value=mean_std)
+            ws.cell(row=r, column=col + 1, value=f'{n}/{tot}')
+            for c2 in range(col, col + 2):
                 ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
-            col += 3
+            col += 2
 
     # Overall rows
     for row_label, skip15 in [('Overall', False), ('Overall*', True)]:
@@ -662,12 +662,13 @@ def _sheet_fault_detection_time(wb, results):
                 all_times.extend(tm.get('fdet_times', []))
                 n_det += tm.get('fdet_detected', 0)
                 n_tot += tm.get('fdet_total', 0)
-            ws.cell(row=r, column=col,     value=round(float(np.mean(all_times)), 1) if all_times else None)
-            ws.cell(row=r, column=col + 1, value=round(float(np.std(all_times)), 1)  if all_times else None)
-            ws.cell(row=r, column=col + 2, value=f'{n_det}/{n_tot}')
-            for c2 in range(col, col + 3):
+            mean_std = (f'{float(np.mean(all_times)):.1f} \u00b1 {float(np.std(all_times)):.1f}'
+                        if all_times else None)
+            ws.cell(row=r, column=col,     value=mean_std)
+            ws.cell(row=r, column=col + 1, value=f'{n_det}/{n_tot}')
+            for c2 in range(col, col + 2):
                 ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
-            col += 3
+            col += 2
 
     note_row = r + 1
     ws.cell(row=note_row, column=1, value='* excludes IDV15').font = Font(italic=True)
@@ -703,10 +704,10 @@ def _sheet_fault_diagnosis_time(wb, results):
         cell.font = Font(bold=True)
         cell.fill = PatternFill('solid', fgColor=color)
         cell.alignment = Alignment(horizontal='center')
-        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 6)
+        ws.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col + 4)
         sub_headers = [
-            'FDiagT\nMean', 'FDiagT\nStd',
-            '1st Diag\nMean', '1st Diag\nStd',
+            'FDiagT\nMean \u00b1 Std',
+            '1st Diag\nMean \u00b1 Std',
             'Trials', 'Correct\nDiag (%)', '1st Diag\nCorrect (%)',
         ]
         for offset, sub_h in enumerate(sub_headers):
@@ -714,7 +715,7 @@ def _sheet_fault_diagnosis_time(wb, results):
             c2.font = Font(bold=True)
             c2.fill = PatternFill('solid', fgColor=color)
             c2.alignment = Alignment(horizontal='center', wrap_text=True)
-        col += 7
+        col += 5
 
     ws.cell(row=2, column=1, value='Fault')
     ws.cell(row=2, column=1).font = Font(bold=True)
@@ -737,16 +738,18 @@ def _sheet_fault_diagnosis_time(wb, results):
             fd_mean  = tm.get('first_diag_mean')
             fd_std   = tm.get('first_diag_std')
             fdc_rate = tm.get('first_diag_correct_rate')
-            ws.cell(row=r, column=col,     value=round(mean, 1)     if mean     is not None else None)
-            ws.cell(row=r, column=col + 1, value=round(std, 1)      if std      is not None else None)
-            ws.cell(row=r, column=col + 2, value=round(fd_mean, 1)  if fd_mean  is not None else None)
-            ws.cell(row=r, column=col + 3, value=round(fd_std, 1)   if fd_std   is not None else None)
-            ws.cell(row=r, column=col + 4, value=f'{n_diag}/{n_tot}')
-            ws.cell(row=r, column=col + 5, value=round(acc * 100, 1)     if acc      is not None else None)
-            ws.cell(row=r, column=col + 6, value=round(fdc_rate * 100, 1) if fdc_rate is not None else None)
-            for c2 in range(col, col + 7):
+            fdiag_ms = (f'{mean:.1f} \u00b1 {std:.1f}'
+                        if mean is not None and std is not None else None)
+            fd_ms    = (f'{fd_mean:.1f} \u00b1 {fd_std:.1f}'
+                        if fd_mean is not None and fd_std is not None else None)
+            ws.cell(row=r, column=col,     value=fdiag_ms)
+            ws.cell(row=r, column=col + 1, value=fd_ms)
+            ws.cell(row=r, column=col + 2, value=f'{n_diag}/{n_tot}')
+            ws.cell(row=r, column=col + 3, value=round(acc * 100, 1)      if acc      is not None else None)
+            ws.cell(row=r, column=col + 4, value=round(fdc_rate * 100, 1) if fdc_rate is not None else None)
+            for c2 in range(col, col + 5):
                 ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
-            col += 7
+            col += 5
 
     # Overall rows
     for row_label, skip15 in [('Overall', False), ('Overall*', True)]:
@@ -768,16 +771,18 @@ def _sheet_fault_diagnosis_time(wb, results):
                 n_diag_windows    += tm.get('n_diag_windows', 0)
                 n_correct_windows += tm.get('n_correct_windows', 0)
                 n_first_correct   += tm.get('first_diag_correct', 0)
-            ws.cell(row=r, column=col,     value=round(float(np.mean(all_times)), 1)       if all_times       else None)
-            ws.cell(row=r, column=col + 1, value=round(float(np.std(all_times)), 1)        if all_times       else None)
-            ws.cell(row=r, column=col + 2, value=round(float(np.mean(all_first_times)), 1) if all_first_times else None)
-            ws.cell(row=r, column=col + 3, value=round(float(np.std(all_first_times)), 1)  if all_first_times else None)
-            ws.cell(row=r, column=col + 4, value=f'{n_diag}/{n_tot}')
-            ws.cell(row=r, column=col + 5, value=round(n_correct_windows / n_diag_windows * 100, 1) if n_diag_windows else None)
-            ws.cell(row=r, column=col + 6, value=round(n_first_correct / n_tot * 100, 1)            if n_tot          else None)
-            for c2 in range(col, col + 7):
+            fdiag_ms = (f'{float(np.mean(all_times)):.1f} \u00b1 {float(np.std(all_times)):.1f}'
+                        if all_times else None)
+            fd_ms    = (f'{float(np.mean(all_first_times)):.1f} \u00b1 {float(np.std(all_first_times)):.1f}'
+                        if all_first_times else None)
+            ws.cell(row=r, column=col,     value=fdiag_ms)
+            ws.cell(row=r, column=col + 1, value=fd_ms)
+            ws.cell(row=r, column=col + 2, value=f'{n_diag}/{n_tot}')
+            ws.cell(row=r, column=col + 3, value=round(n_correct_windows / n_diag_windows * 100, 1) if n_diag_windows else None)
+            ws.cell(row=r, column=col + 4, value=round(n_first_correct / n_tot * 100, 1)            if n_tot          else None)
+            for c2 in range(col, col + 5):
                 ws.cell(row=r, column=c2).alignment = Alignment(horizontal='center')
-            col += 7
+            col += 5
 
     note_row = r + 1
     ws.cell(row=note_row, column=1, value='* excludes IDV15').font = Font(italic=True)
