@@ -49,9 +49,15 @@ All models are registered in `src/models/__init__.py` and share the same trainin
         -Perform scaling on training dataset with transformation applied to validation and testing dataset
 3) Generate sliding windows
     -Create sliding windows per the `windowing` block in `configs/config.yaml` (default: length 5, stride 1)
-4) Train model
-5) Hyperparameter tuning
-6) Evaluate performance
+4) Train model (`scripts/train_best.py`)
+    - Trains a model variant using hyperparameters already found in tuning (`best_params.json`), with no Optuna and no val split (early stops on train loss)
+    - Saves model weights, training loss curve, and `predictions.npz` (probabilities + metadata) for the variant
+5) Hyperparameter tuning (`scripts/tune.py`)
+    - Runs an Optuna search (TPE sampler) per model variant, scoring each trial on the validation split, to find the best hyperparameters
+    - Retrains the best trial's configuration and saves `best_params.json` alongside weights and `predictions.npz`
+6) Evaluate performance (`scripts/evaluate.py`)
+    - Loads each variant's saved `predictions.npz` (no retraining) and computes accuracy, F1, alarm metrics (FAR/CNR/FDR/MR), and fault detection/diagnosis timing
+    - Outputs a combined `model_evaluation.xlsx` comparing all variants
 
 ---
 
@@ -281,17 +287,18 @@ Varies the alarm-onset cutoff — the model and its weights are untouched; this 
 
 By default, an alarm fires when `P(NOC) < 10%` (`alarm_threshold = 0.90` in `evaluate.py`). This sweep recomputes alarm/timing metrics at `P(NOC) < 5%, 7.5%, 10%, 12.5%, 15%` against the same saved predictions.
 
-**Prerequisite:** `predictions.npz` must already exist for the target model (i.e. `train_best.py` or `tune.py` has been run for it).
+**Prerequisite:** `predictions.npz` must already exist for the target model(s) (i.e. `train_best.py` or `tune.py` has been run for them). Models missing `predictions.npz` are skipped with a warning.
 
 ```bash
-# Sweep the default thresholds (5%, 7.5%, 10%, 12.5%, 15%) for WavKAN
-python scripts/sensitivity_threshold.py --model wavelet_kan
+# Sweep the default thresholds (5%, 7.5%, 10%, 12.5%, 15%) for the default models (WavKAN, MLP, CNN)
+python scripts/sensitivity_threshold.py
 
-# Or specify custom thresholds
-python scripts/sensitivity_threshold.py --model wavelet_kan --thresholds 0.05,0.10,0.20
+# Or specify a single model, a custom subset, and/or custom thresholds
+python scripts/sensitivity_threshold.py --model wavelet_kan
+python scripts/sensitivity_threshold.py --model wavelet_kan,mlp,cnn --thresholds 0.05,0.10,0.20
 ```
 
-Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` (e.g. `results_N200_tr160_v0_te40/wavelet_kan/threshold_sensitivity.xlsx`), one column per threshold instead of per model:
+Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` for each model swept (e.g. `results_N200_tr160_v0_te40/wavelet_kan/threshold_sensitivity.xlsx`), one column per threshold instead of per model:
 - **Alarm Analysis** — FAR, CNR, FDR, MR per threshold
 - **Per-Class Detection Rate** — detection rate per fault class, per threshold
 - **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per threshold
