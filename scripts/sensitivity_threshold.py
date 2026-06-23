@@ -18,7 +18,8 @@ import openpyxl
 from configs.config_loader import load_config
 from scripts.evaluate import (
     compute_alarm_metrics, compute_timing_metrics,
-    _sheet_alarm_analysis, _sheet_per_class_fdr, _sheet_fault_detection_time,
+    _sheet_alarm_analysis, _sheet_per_class_fdr,
+    _sheet_fault_detection_time, _sheet_fault_diagnosis_time,
     ALL_VARIANTS,
 )
 
@@ -55,11 +56,13 @@ def run_threshold_sensitivity(results_dir: Path, variant: str, thresholds: list[
     for t in thresholds:
         alarm_metrics = compute_alarm_metrics(y_prob, y_true, detection_threshold=t)
 
+        # diagnosis_confidence is swept in lockstep with detection_threshold (1 - t),
+        # so FDiagT moves alongside FDetT instead of staying pinned at the 0.90 default.
         timing_metrics = {}
         if has_timing_meta:
             timing = compute_timing_metrics(
                 y_prob, data['Run_ID'], data['start_idx'], data['end_idx'],
-                detection_threshold=t,
+                detection_threshold=t, diagnosis_confidence=1.0 - t,
             )
             timing_metrics = {str(k): v for k, v in timing.items()}
 
@@ -82,6 +85,7 @@ def save_threshold_report(results: dict, out_path: Path):
     _sheet_alarm_analysis(wb, results)
     _sheet_per_class_fdr(wb, results)
     _sheet_fault_detection_time(wb, results)
+    _sheet_fault_diagnosis_time(wb, results)
 
     wb.save(out_path)
     print(f"\n  Saved: {out_path}")

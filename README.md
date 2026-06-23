@@ -302,3 +302,4 @@ Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` for each model swep
 - **Alarm Analysis** — FAR, CNR, FDR, MR per threshold
 - **Per-Class Detection Rate** — detection rate per fault class, per threshold
 - **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per threshold
+- **Fault Diagnosis Time** — FDiag mean ± std, diagnosed/total count, and diagnosis accuracy per fault class, per threshold (using `diagnosis_confidence = 1 - threshold`)
