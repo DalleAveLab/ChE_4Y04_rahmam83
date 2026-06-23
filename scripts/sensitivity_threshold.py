@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Alarm-threshold sensitivity analysis: re-evaluates a model's saved predictions
 # at different P(NOC) detection thresholds, without retraining.
-# Usage: python scripts/sensitivity_threshold.py --model wavelet_kan
+# Usage: python scripts/sensitivity_threshold.py
+#        python scripts/sensitivity_threshold.py --model wavelet_kan,mlp,cnn
 #        python scripts/sensitivity_threshold.py --model wavelet_kan --thresholds 0.05,0.075,0.10,0.125,0.15
 
 import sys
@@ -22,19 +23,19 @@ from scripts.evaluate import (
 )
 
 DEFAULT_THRESHOLDS = [0.05, 0.075, 0.10, 0.125, 0.15]
+DEFAULT_MODELS = ['wavelet_kan', 'mlp', 'cnn']
 
 
 def format_threshold_label(t: float) -> str:
     return f"{t * 100:g}%"
 
 
-def run_threshold_sensitivity(results_dir: Path, variant: str, thresholds: list[float]) -> dict:
-    """Re-evaluate predictions.npz at each detection threshold; returns {label: metrics_dict}."""
+def run_threshold_sensitivity(results_dir: Path, variant: str, thresholds: list[float]) -> dict | None:
+    """Re-evaluate predictions.npz at each detection threshold; returns {label: metrics_dict}, or None if missing."""
     preds_path = results_dir / variant / 'predictions.npz'
     if not preds_path.exists():
-        raise FileNotFoundError(
-            f"{preds_path} not found — run scripts/train_best.py first to produce predictions."
-        )
+        print(f"  WARNING: {preds_path} not found — skipping {variant}")
+        return None
 
     data = np.load(preds_path, allow_pickle=True)
     y_true = data['y_true']
@@ -90,9 +91,9 @@ def main():
     parser = argparse.ArgumentParser(
         description='Alarm-threshold sensitivity analysis (post-hoc, no retraining)'
     )
-    parser.add_argument('--model', type=str, default='wavelet_kan',
-                        choices=ALL_VARIANTS,
-                        help='Variant whose saved predictions.npz to re-analyze')
+    parser.add_argument('--model', type=str, default=','.join(DEFAULT_MODELS),
+                        help=f'Comma-separated variants whose saved predictions.npz to re-analyze '
+                             f'(default: {",".join(DEFAULT_MODELS)}; choices: {",".join(ALL_VARIANTS)})')
     parser.add_argument('--config', type=str, default='configs/config.yaml',
                         help='Path to config file')
     parser.add_argument('--thresholds', type=str,
@@ -101,21 +102,28 @@ def main():
     args = parser.parse_args()
 
     thresholds = sorted(float(t) for t in args.thresholds.split(','))
+    models = [m.strip() for m in args.model.split(',')]
+    for m in models:
+        if m not in ALL_VARIANTS:
+            parser.error(f"invalid model '{m}' (choices: {','.join(ALL_VARIANTS)})")
 
     config = load_config(args.config)
     results_dir = Path(config.results_dir)
 
-    print("=" * 90)
-    print(f"  Alarm-Threshold Sensitivity — {args.model}")
-    print("=" * 90)
-    print(f"  Predictions: {results_dir / args.model / 'predictions.npz'}")
-    print(f"  Thresholds:  {[format_threshold_label(t) for t in thresholds]}")
-    print("=" * 90)
+    for model in models:
+        print("=" * 90)
+        print(f"  Alarm-Threshold Sensitivity — {model}")
+        print("=" * 90)
+        print(f"  Predictions: {results_dir / model / 'predictions.npz'}")
+        print(f"  Thresholds:  {[format_threshold_label(t) for t in thresholds]}")
+        print("=" * 90)
 
-    results = run_threshold_sensitivity(results_dir, args.model, thresholds)
+        results = run_threshold_sensitivity(results_dir, model, thresholds)
+        if results is None:
+            continue
 
-    out_path = results_dir / args.model / 'threshold_sensitivity.xlsx'
-    save_threshold_report(results, out_path)
+        out_path = results_dir / model / 'threshold_sensitivity.xlsx'
+        save_threshold_report(results, out_path)
 
 
 if __name__ == '__main__':
