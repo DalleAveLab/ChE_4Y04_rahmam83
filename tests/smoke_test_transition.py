@@ -102,48 +102,54 @@ def main():
     # ── Plot ──────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(12, 5))
 
+    plt.rcParams['font.family'] = 'sans-serif'
+
+    C_NOC    = '#4C8AC4'      # medium blue
+    C_FAULT  = '#F07F2D'      # warm orange
+    C_OTHER  = '#2EAA6E'      # green
+    C_VLINE  = '#C0392B'      # deep red for fault insertion marker
+
     # P(NOC)
-    ax.plot(x_axis, mean_probs[:, 0], color='steelblue', linewidth=1.5, label='P(NOC)')
+    ax.plot(x_axis, mean_probs[:, 0], color=C_NOC, linewidth=2.0, label='P(NOC)', zorder=3)
     ax.fill_between(x_axis,
                     mean_probs[:, 0] - std_probs[:, 0],
                     mean_probs[:, 0] + std_probs[:, 0],
-                    alpha=0.2, color='steelblue')
+                    alpha=0.18, color=C_NOC, zorder=2)
 
     # P(true fault)
-    ax.plot(x_axis, mean_probs[:, FAULT_K], color='darkorange', linewidth=1.5,
-            label=f'P(IDV{FAULT_K})')
+    ax.plot(x_axis, mean_probs[:, FAULT_K], color=C_FAULT, linewidth=2.0,
+            label=f'P(IDV{FAULT_K})', zorder=3)
     ax.fill_between(x_axis,
                     mean_probs[:, FAULT_K] - std_probs[:, FAULT_K],
                     mean_probs[:, FAULT_K] + std_probs[:, FAULT_K],
-                    alpha=0.2, color='darkorange')
+                    alpha=0.18, color=C_FAULT, zorder=2)
 
     # Top misclassified class
     if top_other_class is not None:
-        ax.plot(x_axis, mean_probs[:, top_other_class], color='crimson', linewidth=1.5,
-                linestyle='--', label=f'P(IDV{top_other_class}) [top other]')
+        ax.plot(x_axis, mean_probs[:, top_other_class], color=C_OTHER, linewidth=1.8,
+                linestyle='-', label=f'P(IDV{top_other_class}) [top other]', zorder=3)
         ax.fill_between(x_axis,
                         mean_probs[:, top_other_class] - std_probs[:, top_other_class],
                         mean_probs[:, top_other_class] + std_probs[:, top_other_class],
-                        alpha=0.15, color='crimson')
+                        alpha=0.13, color=C_OTHER, zorder=2)
 
     # Fault insertion line
-    ax.axvline(x=FAULT_START, color='red', linestyle='--', linewidth=1.2,
-               label=f'Fault inserted (t={FAULT_START})')
-
-    # 90% threshold line
-    ax.axhline(y=0.90, color='gray', linestyle=':', linewidth=1.0, label='90% threshold')
+    ax.axvline(x=FAULT_START, color=C_VLINE, linestyle='--', linewidth=1.4,
+               label=f'Fault inserted (t={FAULT_START})', zorder=4)
 
     ax.set_xlim(x_axis[0], x_axis[-1])
-    ax.set_ylim(-0.05, 1.05)
-    ax.set_xlabel('Timestep (end of window)', fontsize=10)
-    ax.set_ylabel('Softmax probability', fontsize=10)
+    ax.set_ylim(-0.02, 1.05)
+    ax.set_xlabel('Timestep (end of window)', fontsize=11)
+    ax.set_ylabel('Softmax probability', fontsize=11)
     ax.set_title(
         f'{MODEL} — IDV{FAULT_K}: Transition zoom  '
         f'(t={x_axis[0]}–{x_axis[-1]}, mean ±1 std over {len(prob_curves)} runs)',
-        fontsize=11
+        fontsize=12
     )
-    ax.legend(fontsize=9, loc='center right')
-    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10, loc='center right', framealpha=0.85, edgecolor='#cccccc')
+    ax.grid(True, alpha=0.25, linewidth=0.7)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
     fig.tight_layout()
 
