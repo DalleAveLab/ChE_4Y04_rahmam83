@@ -30,13 +30,13 @@ All models are registered in `src/models/__init__.py` and share the same trainin
 
 ## Setup
 1) Install dependencies: python -m pip install -r requirements.txt
-2) Place the [raw H5 file](https://data.dtu.dk/articles/dataset/Tennessee_Eastman_Reference_Data_for_Fault-Detection_and_Decision_Support_Systems/13385936) (Mode 1 only) in: `data/raw/tep_data.h5`
-2) Edit config.yaml
+2) Place the [raw H5 file](https://data.dtu.dk/articles/dataset/Tennessee_Eastman_Reference_Data_for_Fault-Detection_and_Decision_Support_Systems/13385936) (Mode 1 only) at the path set by `data.raw_source` in `configs/config.yaml` (default: `data\raw\TEP_Mode1.h5`)
+3) Edit `configs/config.yaml` (random seed, splits, windowing, tuning search space)
 
 
 ## Pipeline Overview
-1) Load and label data from H5 (load_data.py)
-    - Loads "processdata" and "additional_meas" into a split of 30, 10, 10 runs for training, validation, and testing set.
+1) Load and label data from H5 (`src/preprocessing/tep_data_processor.py`)
+    - Randomly selects `total_runs` runs per IDV and splits them into train/val/test per the `splits` block in `configs/config.yaml` (e.g. 30/10/10 for Experiment 1, 160/0/40 for Experiment 2)
     - Label data with header row from "Processdata_Labels" and "Additional_Meas_Labels"
     - Add target column for classifcation of timestep: healthy (0), IDV(X) (X)
         -Healthy data is indices 0-599
@@ -48,7 +48,7 @@ All models are registered in `src/models/__init__.py` and share the same trainin
     - Scaling (Z-scale)
         -Perform scaling on training dataset with transformation applied to validation and testing dataset
 3) Generate sliding windows
-    -Create sliding windows of length 5 with a stride of 1
+    -Create sliding windows per the `windowing` block in `configs/config.yaml` (default: length 5, stride 1)
 4) Train model
 5) Hyperparameter tuning
 6) Evaluate performance
@@ -125,10 +125,16 @@ Outputs per model to `results_N50_tr30_v10_te10/<model>/`:
 - `eval_metrics.json` — full metrics (see Evaluation Outputs below)
 - `loss_curve.png` — training loss curve
 - `confusion_matrix.png` — row-normalised confusion matrix heatmap
-- `time_series_IDV{k}.png` — probability time-series plot for each fault class (27 plots)
 
 Output to `results_N50_tr30_v10_te10/`:
-- `model_scores_and_alarm_metrics.txt` — cross-model comparison table (accuracy, macro F1, val accuracy, confidence, epochs, training time, best params), per-class F1 breakdown, alarm analysis (FAR, CNR, FDR, MR, top-2 margin), and per-class detection rates
+- `model_evaluation.xlsx` — cross-model comparison workbook (see Evaluation Outputs below)
+
+```bash
+# 5. (Optional) Generate per-fault probability time-series plots
+python scripts/plot_time_series.py
+```
+Outputs per model to `results_N50_tr30_v10_te10/<model>/`:
+- `time_series_IDV{k}.png` — probability time-series plot for each fault class
 
 ---
 
@@ -204,10 +210,16 @@ Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
 - `eval_metrics.json` — full metrics (see Evaluation Outputs below)
 - `loss_curve.png` — training loss curve
 - `confusion_matrix.png` — row-normalised confusion matrix heatmap
-- `time_series_IDV{k}.png` — probability time-series plot for each fault class (27 plots)
 
 Output to `results_N200_tr160_v0_te40/`:
-- `model_scores_and_alarm_metrics.txt` — cross-model comparison table (accuracy, macro F1, val accuracy, confidence, epochs, training time, best params), per-class F1 breakdown, alarm analysis (FAR, CNR, FDR, MR, top-2 margin), and per-class detection rates
+- `model_evaluation.xlsx` — cross-model comparison workbook (see Evaluation Outputs below)
+
+```bash
+# 5. (Optional) Generate per-fault probability time-series plots
+python scripts/plot_time_series.py
+```
+Outputs per model to `results_N200_tr160_v0_te40/<model>/`:
+- `time_series_IDV{k}.png` — probability time-series plot for each fault class
 
 ---
 
@@ -232,10 +244,54 @@ Output to `results_N200_tr160_v0_te40/`:
 | `per_class_detection_rate` | FDR broken down by individual fault class IDV# |
 | `mean_top2_margin` | Mean gap between top-1 and top-2 softmax probabilities |
 | `frac_ambiguous` | Fraction of windows where top-2 margin < 10 pp |
+| `timing_metrics` | Per-fault-class FDet/FDiag timing (see below) |
+| `best_params` | Hyperparameters used for this run (from `best_params.json`, if present) |
+| `val_accuracy`, `n_trials`, `best_trial` | Optuna tuning metadata (Experiment 1 only; `null` for Experiment 2) |
+| `epochs_trained`, `training_time_s` | Epochs run before early stopping and wall-clock training time |
 
-**Alarm metric definitions** (threshold: fault probability = 1 − P(class 0) > 0.90):
+**Alarm metric definitions** (threshold: fault probability = 1 − P(class 0) > 0.90 by default — see Sensitivity Analysis below for varying this):
 
 ```
 FAR + CNR = 1.0   (all healthy windows accounted for)
 FDR + MR  = 1.0   (all fault windows accounted for)
 ```
+
+`timing_metrics` (per fault class IDV#, relative to fault insertion at index 600):
+- `fdet_mean` / `fdet_std` — Fault Detection Time: first window where P(NOC) drops below the alarm threshold
+- `fdiag_mean` / `fdiag_std` — Fault Diagnosis Time: first window where the probability of the *true* fault class exceeds 90%
+- `fdiag_accuracy` — of all windows confidently diagnosed (any non-NOC class > 90%), the fraction diagnosed as the correct class
+
+`model_evaluation.xlsx` (written by `evaluate.py`, one row/column per model) contains:
+- **Model Comparison** — accuracy, macro F1, val accuracy, confidence, epochs, training time, best params
+- **Per-Class F1** — F1 score per fault class, per model
+- **Alarm Analysis** — FAR, CNR, FDR, MR, top-2 margin, per model
+- **Per-Class Detection Rate** — detection rate per fault class, per model
+- **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per model
+- **Fault Diagnosis Time** — FDiag mean ± std, diagnosis accuracy, per fault class, per model
+
+---
+
+## Sensitivity Analysis
+
+Sensitivity sweeps re-examine an **already-trained** model under different post-hoc or pipeline settings, isolating one variable at a time. Each sweep is documented in its own subsection below as it's implemented.
+
+### Alarm-Threshold Sweep
+
+Varies the alarm-onset cutoff — the model and its weights are untouched; this only changes how the *already-computed* softmax probabilities (`predictions.npz` → `y_prob`) are thresholded to decide "alarm vs. no alarm." No retraining or data regeneration is involved, since the threshold never enters the training objective.
+
+By default, an alarm fires when `P(NOC) < 10%` (`alarm_threshold = 0.90` in `evaluate.py`). This sweep recomputes alarm/timing metrics at `P(NOC) < 5%, 7.5%, 10%, 12.5%, 15%` against the same saved predictions.
+
+**Prerequisite:** `predictions.npz` must already exist for the target model (i.e. `train_best.py` or `tune.py` has been run for it).
+
+```bash
+# Sweep the default thresholds (5%, 7.5%, 10%, 12.5%, 15%) for WavKAN
+python scripts/sensitivity_threshold.py --model wavelet_kan
+
+# Or specify custom thresholds
+python scripts/sensitivity_threshold.py --model wavelet_kan --thresholds 0.05,0.10,0.20
+```
+
+Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` (e.g. `results_N200_tr160_v0_te40/wavelet_kan/threshold_sensitivity.xlsx`), one column per threshold instead of per model:
+- **Alarm Analysis** — FAR, CNR, FDR, MR per threshold
+- **Per-Class Detection Rate** — detection rate per fault class, per threshold
+- **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per threshold
