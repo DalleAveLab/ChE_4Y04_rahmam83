@@ -207,6 +207,40 @@ def compute_timing_metrics(
     return timing
 
 
+def compute_alarm_metrics(y_prob: np.ndarray, y_true: np.ndarray,
+                           detection_threshold: float = 0.10) -> dict:
+    """
+    Alarm raised when P(NOC) drops below detection_threshold
+    (equivalently, fault probability 1 - P(NOC) exceeds 1 - detection_threshold).
+
+    Returns false_alarm_rate, correct_normal_rate, detection_rate, miss_rate,
+    and per_class_detection_rate (dict: fault class -> detection rate).
+    """
+    fault_prob = 1.0 - y_prob[:, 0]
+    alarm = fault_prob > (1.0 - detection_threshold)
+    healthy_mask = y_true == 0
+    fault_mask   = y_true != 0
+
+    false_alarm_rate    = float(alarm[healthy_mask].mean()) if healthy_mask.any() else None
+    detection_rate       = float(alarm[fault_mask].mean())   if fault_mask.any()   else None
+    correct_normal_rate = (1.0 - false_alarm_rate) if false_alarm_rate is not None else None
+    miss_rate            = (1.0 - detection_rate)   if detection_rate   is not None else None
+
+    fault_classes_list = sorted(c for c in set(y_true) if c != 0)
+    per_class_detection_rate = {
+        int(k): float(alarm[y_true == k].mean()) if (y_true == k).any() else None
+        for k in fault_classes_list
+    }
+
+    return {
+        'false_alarm_rate':         false_alarm_rate,
+        'detection_rate':           detection_rate,
+        'correct_normal_rate':      correct_normal_rate,
+        'miss_rate':                miss_rate,
+        'per_class_detection_rate': per_class_detection_rate,
+    }
+
+
 def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
     """Load predictions.npz and compute metrics; returns None if file doesn't exist."""
     preds_path = results_dir / variant / 'predictions.npz'
@@ -237,22 +271,14 @@ def evaluate_variant(results_dir: Path, variant: str) -> dict | None:
         mean_conf_correct = float(confidence[correct_mask].mean()) if correct_mask.any() else None
         mean_conf_wrong   = float(confidence[~correct_mask].mean()) if (~correct_mask).any() else None
 
-        # Alarm: raised when fault probability (1 - P(class 0)) exceeds threshold
-        fault_prob  = 1.0 - y_prob[:, 0]
-        alarm       = fault_prob > ALARM_THRESHOLD
-        healthy_mask = y_true == 0
-        fault_mask   = y_true != 0
-        false_alarm_rate    = float(alarm[healthy_mask].mean()) if healthy_mask.any() else None
-        detection_rate      = float(alarm[fault_mask].mean())   if fault_mask.any()   else None
-        correct_normal_rate = (1.0 - false_alarm_rate) if false_alarm_rate is not None else None
-        miss_rate           = (1.0 - detection_rate)   if detection_rate   is not None else None
-
-        # Per-class FDR: detection rate for each individual fault class
-        fault_classes_list = sorted(c for c in set(y_true) if c != 0)
-        per_class_detection_rate = {
-            int(k): float(alarm[y_true == k].mean()) if (y_true == k).any() else None
-            for k in fault_classes_list
-        }
+        # Alarm: raised when P(NOC) drops below (1 - ALARM_THRESHOLD)
+        alarm_metrics = compute_alarm_metrics(y_prob, y_true,
+                                               detection_threshold=1.0 - ALARM_THRESHOLD)
+        false_alarm_rate         = alarm_metrics['false_alarm_rate']
+        detection_rate            = alarm_metrics['detection_rate']
+        correct_normal_rate      = alarm_metrics['correct_normal_rate']
+        miss_rate                 = alarm_metrics['miss_rate']
+        per_class_detection_rate = alarm_metrics['per_class_detection_rate']
 
         # Top-2 margin: gap between highest and second-highest class probability.
         # A small margin (e.g. 35% vs 34%) means the model is uncertain even when
