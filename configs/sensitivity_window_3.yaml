@@ -1,0 +1,187 @@
+# TEP Data Processing Pipeline Configuration
+
+# Data Paths
+data:
+  raw_source: 'data\raw\TEP_Mode1.h5'  # UPDATE THIS: Path to your 23GB source file
+  processed_base_dir: 'data\processed'  # Base dir; experiment suffix auto-appended from splits
+
+# Random Seed
+random_seed: 42
+
+# Feature Engineering Settings
+feature_engineering:
+  drop_analyzers: true        # Drop analyzer measurement features
+  drop_zero_variance: true    # Drop features with zero variance
+  variance_threshold: 0.0     # Threshold for zero variance detection
+  
+  # IMPORTANT: List the EXACT column names you want to drop
+  # Run: python scripts/inspect_columns.py "path/to/TEP_Mode1.h5"
+  # to see all your column names, then copy the ones you want to drop here
+  
+  analyzer_features:
+    # Example - Replace these with YOUR actual column names:
+    # - 'Component A'
+    # - 'Component B' 
+    # - 'Component C'
+    # - 'Reactor Comp D'
+    # - 'Separator Comp E'
+    
+    # Fill this  after running inspect_columns.py
+    ['Time', 
+     'Component A to Reactor',
+     'Component B to Reactor',
+     'Component C to Reactor',
+     'Component D to Reactor',
+     'Component E to Reactor',
+     'Component F to Reactor',
+
+     'Component A in Purge',
+     'Component B in Purge',
+     'Component C in Purge',
+     'Component D in Purge',
+     'Component E in Purge',
+     'Component F in Purge',
+     'Component G in Purge',
+     'Component H in Purge',
+
+     'Component D in Product',
+     'Component E in Product',
+     'Component F in Product',
+     'Component G in Product',
+     'Component H in Product',
+
+     'A in stream 1',
+     'B in stream 1',
+     'C in stream 1',
+     'D in stream 1',
+     'E in stream 1',
+     'F in stream 1',
+
+     'A in stream 2',
+     'B in stream 2',
+     'C in stream 2',
+     'D in stream 2',
+     'E in stream 2',
+     'F in stream 2',
+
+     'A in stream 3',
+     'B in stream 3',
+     'C in stream 3',
+     'D in stream 3',
+     'E in stream 3',
+     'F in stream 3',
+     
+     'A in stream 4',
+     'B in stream 4',
+     'C in stream 4',
+     'D in stream 4',
+     'E in stream 4',
+     'F in stream 4']
+
+# Data Saving Options
+save_options:
+  save_dataframes: true       # Save final DataFrames as .pkl files
+  save_csv_sample: true       # Save CSV sample for inspection
+  csv_sample_rows: 10000      # Number of rows in CSV sample
+
+# Split Configuration (runs per split)
+# output_dir is auto-derived as: processed_base_dir_N{total}_tr{train}_v{val}_te{test}
+# e.g. Exp 1 (50r, 30/10/10) → data\processed_N50_tr30_v10_te10
+# e.g. Exp 2 (200r, 160/0/40) → data\processed_N200_tr160_v0_te40
+splits:
+  total_runs: 200             # Exp 1: 50 runs; Exp 2: 200
+  train_runs: 160             # Exp 1: 30; Exp 2: 160
+  val_runs: 0                # Exp 1: 10; Exp 2: 0
+  test_runs: 40              # Exp 1: 10; Exp 2: 40
+
+# Scaling Options
+scaling:
+  method: 'standard'          # Options: 'standard', 'minmax', 'robust'
+  keep_unscaled: ['Time']     # Columns to keep unscaled
+
+# Windowing Settings
+windowing:
+  window_size: 3              # Number of timesteps per window (sensitivity sweep)
+  stride: 1                   # Step size between windows
+  save_metadata: true         # Save Run_ID, start_idx, end_idx per window
+
+# Model paths
+models:
+  results_base_dir: 'results_w3'  # Base dir; experiment suffix auto-appended from splits (window-size sweep)
+
+# Training settings
+training:
+  batch_size: 2048           # Fixed — not tuned
+  max_epochs: 100            # Maximum epochs
+  early_stopping_patience: 10  # Stop if no improvement in this many epochs
+  num_workers: 4             # DataLoader worker processes (0 = main process only)
+
+# Tuning settings
+tuning:
+  n_trials: 50              # Number of Optuna trials per variant
+  optimize_metric: 'val_accuracy'
+  direction: 'maximize'
+
+  search_space:
+    # --- Universal (all variants) ---
+    hidden_layers:
+      min: 1
+      max: 3
+    hidden_dim:
+      min: 64
+      max: 128
+    learning_rate:
+      min: 1.0e-4
+      max: 1.0e-1
+      log: true
+
+    # --- Variant-specific ---
+    # WaveletKAN
+    wavelet_type:
+      choices: ['mexican_hat', 'morlet', 'dog', 'meyer', 'shannon']
+
+    # FourierKAN
+    gridsize:
+      min: 4
+      max: 12
+
+    smooth_initialization:
+      choices: [true, false]
+
+    # FastKAN
+    num_grids:
+      min: 4
+      max: 12
+
+    grid_min:
+      min: -3.0
+      max: -1.0
+
+    grid_max:
+      min: 1.0
+      max: 3.0
+
+    # EfficientKAN
+    grid_size:
+      min: 4
+      max: 12
+
+    spline_order:
+      choices: [2, 3, 4]
+
+    # ANN models only (MLP, RNN, LSTM, CNN) — not used by KAN variants
+    dropout_prob:
+      min: 0.0
+      max: 0.5
+
+    weight_decay:
+      min: 1.0e-5
+      max: 1.0e-1
+      log: true
+
+    # CNN specific
+    num_filters:
+      min: 16
+      max: 64
+    kernel_size:
+      choices: [2, 3, 4, 5]
