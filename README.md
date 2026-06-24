@@ -265,7 +265,8 @@ FDR + MR  = 1.0   (all fault windows accounted for)
 `timing_metrics` (per fault class IDV#, relative to fault insertion at index 600):
 - `fdet_mean` / `fdet_std` — Fault Detection Time: first window where P(NOC) drops below the alarm threshold
 - `fdiag_mean` / `fdiag_std` — Fault Diagnosis Time: first window where the probability of the *true* fault class exceeds 90%
-- `fdiag_accuracy` — of all windows confidently diagnosed (any non-NOC class > 90%), the fraction diagnosed as the correct class
+- `fdiag_accuracy` — **conditional** accuracy: of all windows confidently diagnosed (any non-NOC class > 90%), the fraction diagnosed as the correct class
+- `coverage` — of *all* post-fault windows for this class, the fraction that ever reach that 90% confidence bar at all (regardless of which class). `fdiag_accuracy` says nothing about how often the model is confident in the first place — a class can show high `fdiag_accuracy` while rarely being confident at all, which `coverage` exposes. Low coverage + high `fdiag_accuracy` reads as "rarely confident, but reliable when it is" (e.g. IDV28: ~22% coverage, ~99.8% conditional accuracy, despite a much lower raw recall in the confusion matrix); low coverage + low `fdiag_accuracy` reads as "rarely confident, and usually wrong when it is" (e.g. IDV15).
 
 `model_evaluation.xlsx` (written by `evaluate.py`, one row/column per model) contains:
 - **Model Comparison** — accuracy, macro F1, val accuracy, confidence, epochs, training time, best params
@@ -273,7 +274,7 @@ FDR + MR  = 1.0   (all fault windows accounted for)
 - **Alarm Analysis** — FAR, CNR, FDR, MR, top-2 margin, per model
 - **Per-Class Detection Rate** — detection rate per fault class, per model
 - **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per model
-- **Fault Diagnosis Time** — FDiag mean ± std, diagnosis accuracy, per fault class, per model
+- **Fault Diagnosis Time** — FDiag mean ± std, conditional diagnosis accuracy, and coverage (% of windows ever confidently diagnosed) per fault class, per model
 
 ---
 
@@ -302,7 +303,7 @@ Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` for each model swep
 - **Alarm Analysis** — FAR, CNR, FDR, MR per threshold
 - **Per-Class Detection Rate** — detection rate per fault class, per threshold
 - **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per threshold
-- **Fault Diagnosis Time** — FDiag mean ± std, diagnosed/total count, and diagnosis accuracy per fault class, per threshold (using `diagnosis_confidence = 1 - threshold`)
+- **Fault Diagnosis Time** — FDiag mean ± std, diagnosed/total count, conditional diagnosis accuracy, and coverage per fault class, per threshold (using `diagnosis_confidence = 1 - threshold`)
 
 ### Window-Size Sweep
 
