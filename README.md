@@ -303,3 +303,25 @@ Output to `<results_dir>/<model>/threshold_sensitivity.xlsx` for each model swep
 - **Per-Class Detection Rate** — detection rate per fault class, per threshold
 - **Fault Detection Time** — FDet mean ± std and detected/total count per fault class, per threshold
 - **Fault Diagnosis Time** — FDiag mean ± std, diagnosed/total count, and diagnosis accuracy per fault class, per threshold (using `diagnosis_confidence = 1 - threshold`)
+
+### Window-Size Sweep
+
+Varies `window_size ∈ {1, 3, 5, 7, 9}` (stride fixed at 1) for WavKAN. Unlike the threshold sweep, this **does** require retraining — window size changes the model's input dimension (`window_size × n_features`, flattened), so weights from one window size are architecturally incompatible with another. It does **not** require re-running `run_pipeline.py`, though: feature engineering and scaling operate on raw per-timestep rows and never touch window size — only `create_windows.py` does, and it writes window files as `{split}_windows_w{N}_s{stride}.npz`, so every window size can live in the same `windows/` folder without collision.
+
+Hyperparameters are **not** re-tuned per window size, the same file Experiment 2 already loads from are reused unchanged for every window size — no Optuna re-run. This isolates the effect of window size from confounding hyperparameter-search variance.
+
+**Config:** one YAML per window size — `configs/sensitivity_window_1.yaml`, `_3.yaml`, `_7.yaml`, `_9.yaml` (window 5 reuses the existing baseline `configs/config.yaml`). Each only differs from `configs/config.yaml` in `windowing.window_size` and `models.results_base_dir` (`results_w1`, `results_w3`, etc. — must differ per window size since `results_dir`/`output_dir` are otherwise derived only from `splits`, not windowing). `data.processed_base_dir` and `splits` are left unchanged so all window sizes share the same extracted/scaled data.
+
+**Run order per window size** (skip 5 — already trained as the Exp 2 baseline):
+```bash
+python scripts/create_windows.py --config configs/sensitivity_window_1.yaml
+python scripts/train_best.py --model wavelet_kan --config configs/sensitivity_window_1.yaml --params-dir results_N50_tr30_v10_te10
+python scripts/evaluate.py --model wavelet_kan --config configs/sensitivity_window_1.yaml
+```
+(repeat for `_3`, `_7`, `_9`)
+
+**Once all five window sizes have `eval_metrics.json`, aggregate them:**
+```bash
+python scripts/sensitivity_window.py --model wavelet_kan
+```
+No recomputation needed here — each `eval_metrics.json` already has everything, so this just loads and re-keys by window-size label. Output to `window_sensitivity_<model>.xlsx` in the repo root (spans multiple experiment folders, so it doesn't belong inside any one of them), with the same six sheets as `model_evaluation.xlsx` but one column per window size (`w1`, `w3`, `w5`, `w7`, `w9`) instead of per model.
