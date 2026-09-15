@@ -5,8 +5,6 @@ Creates sliding windows from processed TEP time-series data.
 Windows are created per run (grouped by Run_ID) to preserve
 temporal integrity and avoid cross-run contamination.
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import numpy as np

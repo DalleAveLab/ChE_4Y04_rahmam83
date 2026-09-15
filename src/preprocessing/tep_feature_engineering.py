@@ -5,8 +5,6 @@ This module handles feature engineering steps:
 1. Dropping zero-variance features
 2. Dropping analyzer measurement features (unrealistic for real-time application)
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import pandas as pd

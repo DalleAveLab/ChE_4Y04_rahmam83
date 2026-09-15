@@ -3,8 +3,6 @@ Configuration Loader for TEP Pipeline
 
 Loads settings from config.yaml file.
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import yaml

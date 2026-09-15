@@ -4,8 +4,6 @@ Helper Script: Identify Analyzer Features
 Run this script to see all column names in your data
 and identify which ones are analyzer measurements.
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import h5py

@@ -4,8 +4,6 @@ Tennessee Eastman Process (TEP) Data Scaling Module
 This module provides utilities for scaling TEP data using StandardScaler.
 Time, Run_ID, and Target columns are kept unscaled.
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import numpy as np

@@ -11,8 +11,6 @@ Usage:
     python tests/test_windowing.py --exp 1
     python tests/test_windowing.py --exp 2
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import sys

@@ -6,8 +6,6 @@ This module provides utilities for:
 2. Loading and labeling the data with proper column names and target labels
 3. Combining processdata and additional_meas datasets
 
-Author: [Your Name]
-Created: February 2026
 """
 
 import h5py
